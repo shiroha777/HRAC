@@ -1,0 +1,68 @@
+\doublespacing % Do not change - required
+
+\chapter{Project Specification}
+\label{chSpec}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% IMPORTANT
+\begin{spacing}{1} %THESE FOUR
+\minitoc % LINES MUST APPEAR IN
+\end{spacing} % EVERY
+\thesisspacing % CHAPTER
+% COPY THEM IN ANY NEW CHAPTER
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Project Aim and Motivation}
+The aim of this project is to design, implement, and evaluate robust server-side aggregation mechanisms for federated learning under the Byzantine threat model. In practical deployments, a subset of clients may transmit arbitrary, faulty, or adversarial updates due to malfunction, unreliable software, or intentional attacks. Standard averaging-based aggregation is highly sensitive to such abnormal updates and can suffer from severe performance degradation or non-convergence. The project focuses on developing an aggregation method that remains effective when client data is heterogeneous (non-IID) and when adversaries exploit temporal dynamics such as server-side momentum.
+
+\section{Problem Definition}
+At each communication round $t$, the server receives a set of client updates $\{\Delta_{t,i}\}_{i=1}^{n}$ and must compute an aggregated update $g_t$ to update the global model. Under the Byzantine threat model, an unknown subset of clients may send arbitrary updates. The key challenge is to reduce the influence of suspicious updates without suppressing benign but diverse updates caused by non-IID data. The aggregation rule must be adaptive and oracle-free: it should not require knowledge of the number or identity of malicious clients.
+
+\section{Project Deliverables}
+The project will deliver the following artefacts:
+\begin{itemize}
+    \item \textbf{Robust aggregation implementation:} a modular server-side aggregation component (PyTorch-based) implementing the proposed \emph{HSM-Adaptive} method and baseline aggregators within a federated learning pipeline.
+    \item \textbf{Attack and evaluation suite:} implementations of representative Byzantine attacks (including impulsive and stealthy/history-aware strategies) and experimental configurations for IID and non-IID client partitions.
+    \item \textbf{Reproducible experiments:} scripts and configuration files to reproduce all reported results, including fixed random seeds where appropriate and clear documentation of hyperparameters.
+    \item \textbf{Diagnostics and logging:} per-round logging of trust/weight statistics (e.g., trust distributions, effective number of clients, precision/recall proxies) to support interpretability and failure-mode analysis.
+    \item \textbf{Interim and final report material:} a clear description of the method, implementation details, and experimental results, supported by figures and tables suitable for inclusion in the final dissertation.
+\end{itemize}
+
+\section{Scope and Assumptions}
+The scope of the project is restricted to server-side aggregation in a standard synchronous federated learning setting. The following assumptions define the evaluation setting:
+\begin{itemize}
+    \item \textbf{Synchronous rounds:} the server aggregates one update per participating client per round (no asynchronous staleness modelling).
+    \item \textbf{Threat model:} Byzantine clients may send arbitrary vectors, including crafted updates designed to evade simple anomaly detectors.
+    \item \textbf{Data heterogeneity:} experiments will include both IID and non-IID partitions to assess robustness--utility trade-offs.
+    \item \textbf{Oracle-free defence:} the defence does not assume prior knowledge of the attacker fraction or attacker identities.
+\end{itemize}
+The project does not aim to address secure aggregation protocols, cryptographic privacy guarantees, or client-side defences beyond what is required to generate standard local updates.
+
+\section{Method Overview}
+The proposed method, \emph{HSM-Adaptive}, computes a soft trust score for each client update by combining complementary signals:
+\begin{itemize}
+    \item \textbf{Population alignment:} cosine alignment of $\Delta_{t,i}$ with a server-side reference direction (previous aggregate or momentum), robustly centred using the median to reduce sensitivity to non-IID shifts.
+    \item \textbf{Self-consistency:} agreement between a client's current update structure and its own historical behaviour, estimated using a low-dimensional sign-sketch representation to tolerate noise while remaining sensitive to abrupt behavioural change.
+    \item \textbf{Scale deviation:} a robust log-ratio measure comparing the current update norm to the client's historical norm profile to detect abnormal scaling.
+\end{itemize}
+These signals are combined into a continuous trust score and transformed into multiplicative aggregation weights using smooth gating functions, avoiding hard exclusion and improving stability under benign heterogeneity.
+
+\section{Success Criteria}
+The project will be considered successful if the proposed aggregation method satisfies the following criteria:
+\begin{itemize}
+    \item \textbf{Utility under benign training:} achieves comparable accuracy and convergence behaviour to standard aggregation (e.g., mean/FedAvg) when all clients are benign.
+    \item \textbf{Robustness under attack:} substantially reduces performance degradation under Byzantine attacks relative to mean aggregation and competitive robust baselines.
+    \item \textbf{Non-IID tolerance:} maintains stable training and avoids excessive suppression of benign clients under non-IID partitions.
+    \item \textbf{Temporal robustness:} demonstrates improved resistance to stealthy, history-aware attacks that exploit server-side momentum or long-term drift.
+    \item \textbf{Reproducibility and interpretability:} provides logs/diagnostics that support analysis of why the defence succeeds or fails.
+\end{itemize}
+
+\section{Out of Scope}
+The following items are explicitly out of scope for this project:
+\begin{itemize}
+    \item cryptographic secure aggregation and privacy-preserving protocols;
+    \item formal verification of robustness guarantees;
+    \item defences requiring trusted hardware or client attestation;
+    \item deployment-specific engineering (e.g., mobile on-device optimisation, production networking stack).
+\end{itemize}
+

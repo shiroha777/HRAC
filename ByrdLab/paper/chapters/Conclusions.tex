@@ -1,0 +1,11 @@
+% Write your conclusions here
+\label{Conclusions}
+
+\begin{bodytwocol}
+
+This project investigated Byzantine robustness in federated/distributed learning, aiming to preserve utility under non-IID data while resisting both overt and stealthy attacks. A history-residual adaptive clipping aggregator (HRAC) was implemented in a modular framework that supports interchangeable attacks, aggregators, and diagnostic logging.
+
+The method's behaviour is made interpretable through per-round residual thresholds, $\mu/\nu$ history statistics, normalised client weights, and attacker-aware bottom-weight summaries in controlled settings. These diagnostics help explain robustness--utility trade-offs beyond final accuracy.
+
+Limitations include hyperparameter sensitivity, limited experimental coverage, and the possibility of down-weighting benign but heterogeneous clients. Future work will (i) evaluate across multiple datasets and both IID/non-IID partitions, (ii) compare against a broader set of baselines (Trimmed Mean, Median, Krum, RFA, FLTrust, etc.) under matched training budgets, and (iii) improve self-calibration of thresholds/weights and test stronger adaptive attackers that exploit history.
+\end{bodytwocol}

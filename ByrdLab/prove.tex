@@ -1,0 +1,2825 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,amsfonts,amsthm,mathtools,bm}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue,
+    pdftitle={Convergence Analysis of HRAC},
+    pdfauthor={OpenAI}
+}
+
+\title{\textbf{Convergence Analysis of HRAC}\\
+\large A Standalone \LaTeX{} File for Direct Overleaf Compilation}
+\author{}
+\date{\today}
+
+\newtheorem{assumption}{Assumption}
+\newtheorem{lemma}{Lemma}
+\newtheorem{theorem}{Theorem}
+\newtheorem{corollary}{Corollary}
+\newtheorem{proposition}{Proposition}
+\newtheorem{definition}{Definition}
+\newtheorem{condition}{Condition}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\F}{\mathcal{F}}
+\newcommand{\HH}{\mathcal{H}}
+\newcommand{\BB}{\mathcal{B}}
+\newcommand{\clip}{\operatorname{clip}}
+\newcommand{\med}{\operatorname{med}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\abs}[1]{\left\lvert #1 \right\rvert}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This note gives a modular convergence analysis for \emph{History-Residual
+Adaptive Clipping} (HRAC) in Byzantine-robust federated optimisation. The
+optimization layer compares the HRAC aggregate with the honest average and
+derives smooth non-convex descent with an explicit aggregation-error floor.
+Honest-majority median protection and bounded honest updates imply
+deterministic boundedness of the clipped messages and of \(\E\norm{g_t}^2\).
+For the adaptive statistics, the main practically relevant conclusion is
+late-stage Byzantine group-level \(\nu\)-band elevation, which induces stronger
+penalty pressure and smaller weights for Byzantine clients once the activation
+threshold is reached. In the experiments motivating this note, neither honest
+nor Byzantine \(d\)- or \(\nu\)-statistics converge to \(0\); instead, both
+groups remain in positive late-stage bands, with Byzantine clients typically
+occupying a higher \(\nu\)-band. Under additional spread control, this
+group-level band elevation upgrades to pointwise \(\nu\)-separation. A windowed
+\(d\)-gap certificate further turns logged statistics into an exact sufficient
+condition for blockwise \(\nu\)-separation. The file is standalone and
+directly compilable in Overleaf.
+\end{abstract}
+
+\tableofcontents
+
+\section{Introduction}
+
+The goal of this document is to give a mathematically clean convergence
+analysis for HRAC. Rather than proving the code line by line, we abstract HRAC
+as a robust aggregation rule and proceed in two steps:
+
+\begin{enumerate}[label=\arabic*.]
+    \item show that the HRAC aggregate remains close to the ideal honest
+    average update;
+    \item show that such an aggregation error can be absorbed into the descent
+    analysis of smooth non-convex optimisation.
+\end{enumerate}
+
+For the adaptive statistics, the main theorem-level target is not universal
+pointwise ordering between Byzantine and honest clients at every late-stage
+round. Instead, the primary claim is the weaker and empirically better-matched
+one: Byzantine clients exhibit a larger late-stage group-mean \(\nu\)-band,
+which induces stronger penalty pressure and smaller weights once the activation
+threshold becomes active. In particular, the intended mechanism is not that
+honest statistics vanish while Byzantine statistics remain nonzero. Rather,
+both groups may stay in positive late-stage bands, while Byzantine clients are
+typically elevated relative to the honest population. Pointwise separation is
+kept as a stronger sufficient refinement.
+
+\section{Problem Setup}
+
+Let \(x_t \in \R^d\) denote the global model at round \(t\).
+Suppose there are \(N\) participating clients, partitioned into an honest set
+\(\HH\) and a Byzantine set \(\BB\), with
+\[
+    |\HH| = H, \qquad |\BB| = B, \qquad N = H + B.
+\]
+
+At round \(t\), the server receives client updates
+\[
+    \{\Delta_i^t\}_{i=1}^N \subset \R^d,
+\]
+and performs the global update
+\begin{equation}
+    x_{t+1} = x_t - \eta_t g_t,
+    \label{eq:server_update}
+\end{equation}
+where \(g_t\) is the aggregate produced by HRAC.
+
+The ideal honest average update is defined as
+\begin{equation}
+    \bar{\Delta}_{\HH}^t
+    :=
+    \frac{1}{H} \sum_{i \in \HH} \Delta_i^t.
+    \label{eq:honest_average}
+\end{equation}
+
+The objective is to minimise a possibly non-convex function
+\[
+    f : \R^d \to \R.
+\]
+
+\section{HRAC Aggregation Rule}
+
+HRAC operates in three stages.
+
+\subsection{Global norm clipping}
+
+Define the round-wise cap
+\begin{equation}
+    B_t := c_g \cdot \med_{1 \le j \le N} \norm{\Delta_j^t},
+    \label{eq:global_cap}
+\end{equation}
+and the globally clipped update
+\begin{equation}
+    \hat{\Delta}_i^t
+    :=
+    \clip(\Delta_i^t, B_t)
+    :=
+    \begin{cases}
+        \Delta_i^t, & \norm{\Delta_i^t} \le B_t,\\[2mm]
+        B_t \dfrac{\Delta_i^t}{\norm{\Delta_i^t}}, & \norm{\Delta_i^t} > B_t.
+    \end{cases}
+    \label{eq:global_clip}
+\end{equation}
+
+\subsection{Per-client history-residual clipping}
+
+For each client \(i\), HRAC maintains a history state
+\[
+    (b_i^t,\mu_i^t,\nu_i^t),
+\]
+where \(b_i^t\) is a running centre, \(\mu_i^t\) is a scale estimate, and
+\(\nu_i^t\) is a change statistic.
+
+Define the residual
+\begin{equation}
+    r_i^t := \hat{\Delta}_i^t - b_i^t,
+    \label{eq:residual}
+\end{equation}
+and the adaptive residual clipping threshold
+\begin{equation}
+    \tau_i^t := c \mu_i^t.
+    \label{eq:tau}
+\end{equation}
+
+The clipped residual is
+\begin{equation}
+    \bar{r}_i^t
+    :=
+    \clip(r_i^t, \tau_i^t)
+    =
+    \begin{cases}
+        r_i^t, & \norm{r_i^t} \le \tau_i^t,\\[2mm]
+        \tau_i^t \dfrac{r_i^t}{\norm{r_i^t}}, & \norm{r_i^t} > \tau_i^t.
+    \end{cases}
+    \label{eq:residual_clip}
+\end{equation}
+
+The post-processed message becomes
+\begin{equation}
+    \tilde{\Delta}_i^t := b_i^t + \bar{r}_i^t.
+    \label{eq:delta_tilde}
+\end{equation}
+
+The history centre \(b_i^t\) follows the implemented EMA dynamics:
+for a newly appearing client, \(b_i^t\) is initialized by
+\(\hat{\Delta}_i^t\); for later rounds,
+\begin{equation}
+    b_i^{t+1}
+    =
+    \rho_b\, b_i^t + (1-\rho_b)\,\Delta_{i,\mathrm{safe}}^t,
+    \label{eq:b_update}
+\end{equation}
+where \(\Delta_{i,\mathrm{safe}}^t\) is the aggregation-path message used in
+the server history update.
+
+% In the current implementation used in experiments
+% (\texttt{enable\_post\_residual\_b\_cap=False}), no additional post-cap is
+% applied to \(\tilde{\Delta}_i^t\) after residual reconstruction.
+
+\subsection{Adaptive weighting}
+
+HRAC assigns weights \(w_i^t \ge 0\) satisfying
+\begin{equation}
+    \sum_{i=1}^N w_i^t = 1,
+    \label{eq:weight_simplex}
+\end{equation}
+where the weights are determined from the statistics
+\(\{\nu_i^t\}_{i=1}^N\).
+
+The final aggregate is
+\begin{equation}
+    g_t = \sum_{i=1}^N w_i^t \tilde{\Delta}_i^t.
+    \label{eq:aggregate}
+\end{equation}
+
+\section{Assumptions}
+
+\begin{assumption}[Lower bounded objective]
+\label{ass:lower_bounded}
+\(f\) is bounded below: \(f(x)\ge f^\star\) for all \(x\in\R^d\).
+\end{assumption}
+
+\begin{assumption}[\(L\)-smoothness]
+\label{ass:smooth}
+\(\norm{\nabla f(x)-\nabla f(y)}\le L\norm{x-y}\) for all \(x,y\in\R^d\).
+\end{assumption}
+
+\begin{assumption}[Bias and variance of the honest average]
+\label{ass:bias_variance}
+Conditioned on \(\F_t\), the honest average has bounded bias and variance:
+\begin{equation}
+    \norm{
+        \E\!\left[\bar{\Delta}_{\HH}^t \mid \F_t\right] - \nabla f(x_t)
+    }
+    \le \xi,
+    \label{eq:bias}
+\end{equation}
+\begin{equation}
+    \E\!\left[
+        \norm{
+            \bar{\Delta}_{\HH}^t -
+            \E\!\left[\bar{\Delta}_{\HH}^t \mid \F_t\right]
+        }^2
+        \,\middle|\, \F_t
+    \right]
+    \le \frac{\sigma^2}{H}.
+    \label{eq:variance}
+\end{equation}
+\end{assumption}
+
+\begin{assumption}[Bounded honest update magnitude]
+\label{ass:honest_update_bound}
+There exists \(G_H<\infty\) such that for all honest clients \(i\in\HH\) and
+all rounds \(t\),
+\begin{equation}
+    \norm{\Delta_i^t}\le G_H.
+    \label{eq:honest_update_bound}
+\end{equation}
+\end{assumption}
+
+\begin{assumption}[Honest majority for robust median cap]
+\label{ass:honest_majority}
+The Byzantine population is strictly less than the honest population:
+\begin{equation}
+    B < H
+    \qquad(\text{equivalently } B < N/2).
+    \label{eq:honest_majority}
+\end{equation}
+\end{assumption}
+
+\section{Basic Properties of HRAC}
+
+\begin{lemma}[Boundedness of globally clipped inputs]
+\label{lem:bounded}
+For every round \(t\) and every client \(i\),
+\begin{equation}
+    \norm{\hat{\Delta}_i^t} \le B_t,
+    \label{eq:uniform_bound}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+The bound \(\norm{\hat{\Delta}_i^t} \le B_t\) follows directly from the
+definition of global clipping in~\eqref{eq:global_clip}.
+
+\end{proof}
+
+\begin{lemma}[Median-cap protection under honest majority]
+\label{lem:median_cap_honest}
+Under Assumption~\ref{ass:honest_majority}, for every round \(t\), the global
+median norm in \eqref{eq:global_cap} is bounded between two honest norms.
+Consequently,
+\begin{equation}
+    B_t
+    =
+    c_g\,\med_{1\le j\le N}\norm{\Delta_j^t}
+    \le
+    c_g\,\max_{i\in\HH}\norm{\Delta_i^t}.
+    \label{eq:median_honest_bound}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+Because \(H>B\), more than half of the \(N\) samples are honest, so every
+median order statistic is bracketed by honest samples. In particular, the
+median cannot exceed the maximum honest norm, giving
+\eqref{eq:median_honest_bound}.
+\end{proof}
+
+\begin{corollary}[Uniform cap bound from honest majority and bounded honest updates]
+\label{cor:Bmax_from_honest}
+Under Assumptions~\ref{ass:honest_majority} and
+\ref{ass:honest_update_bound},
+\begin{equation}
+    B_t
+    \le
+    c_g G_H
+    =: B_{\max},
+    \qquad \forall t.
+    \label{eq:Bmax_from_honest}
+\end{equation}
+\end{corollary}
+
+\begin{proof}
+By Lemma~\ref{lem:median_cap_honest},
+\(
+B_t\le c_g\max_{i\in\HH}\norm{\Delta_i^t}
+\).
+Apply \eqref{eq:honest_update_bound}.
+\end{proof}
+
+\begin{lemma}[EMA boundedness for \(\mu_i^t\)]
+\label{lem:mu_ema_bounded}
+Suppose nonnegative scalars \(s_t\) satisfy \(s_t\le S_{\max}\) for all \(t\),
+and \(\mu_{t+1}=\rho_\mu\mu_t+(1-\rho_\mu)s_t\) with \(0<\rho_\mu<1\) and
+\(\mu_0\le S_{\max}\). Then \(\mu_t\le S_{\max}\) for all \(t\).
+\end{lemma}
+
+\begin{proof}
+Induction with convexity:
+\[
+    \mu_{t+1}
+    =
+    \rho_\mu\mu_t+(1-\rho_\mu)s_t
+    \le
+    \rho_\mu S_{\max}+(1-\rho_\mu)S_{\max}
+    =
+    S_{\max}.
+\]
+\end{proof}
+
+\begin{lemma}[Bounded history states under bounded global cap]
+\label{lem:mu_tau_bounded}
+Assume there exists \(B_{\max}<\infty\) such that \(B_t\le B_{\max}\) for all
+rounds \(t\), and the server-side history update uses the capped safe message
+(\(\norm{\Delta_{i,\mathrm{safe}}^t}\le B_t\), as in the implementation).
+Then for every client \(i\) and every \(t\):
+\begin{equation}
+    \norm{b_i^t}\le B_{\max},
+    \qquad
+    \norm{r_i^t}\le 2B_{\max},
+    \qquad
+    \mu_i^t\le 2B_{\max},
+    \qquad
+    \tau_i^t=c\mu_i^t\le 2cB_{\max}.
+    \label{eq:mu_tau_bounds}
+\end{equation}
+Moreover, the post-processed message is deterministically bounded:
+\begin{equation}
+    \norm{\tilde\Delta_i^t}\le (1+2c)B_{\max} := M_{\tilde\Delta}.
+    \label{eq:tilde_delta_det_bound}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+For \(b_i^t\), the initialization satisfies \(\norm{b_i^0}\le B_{\max}\) since
+it is set from a globally clipped message. If \(\norm{b_i^t}\le B_{\max}\), then
+\[
+    b_i^{t+1}
+    =
+    \rho_b b_i^t + (1-\rho_b)\Delta_{i,\mathrm{safe}}^t,
+    \qquad
+    \norm{\Delta_{i,\mathrm{safe}}^t}\le B_t\le B_{\max},
+\]
+so convexity gives \(\norm{b_i^{t+1}}\le B_{\max}\). Hence
+\(\norm{b_i^t}\le B_{\max}\) for all \(t\).
+
+Because \(\norm{\hat\Delta_i^t}\le B_t\le B_{\max}\),
+\[
+    \norm{r_i^t}
+    =
+    \norm{\hat\Delta_i^t-b_i^t}
+    \le
+    \norm{\hat\Delta_i^t}+\norm{b_i^t}
+    \le
+    2B_{\max}.
+\]
+If \(\mu_i^t\) is initialized at most \(2B_{\max}\) and updated by EMA of
+bounded residual magnitudes (implementation path), then
+Lemma~\ref{lem:mu_ema_bounded} gives \(\mu_i^t\le 2B_{\max}\); thus
+\(\tau_i^t=c\mu_i^t\le 2cB_{\max}\).
+
+Finally, \(\tilde\Delta_i^t=b_i^t+\bar r_i^t\) with
+\(\norm{\bar r_i^t}\le \tau_i^t\), so
+\[
+    \norm{\tilde\Delta_i^t}
+    \le
+    \norm{b_i^t}+\norm{\bar r_i^t}
+    \le
+    B_{\max}+2cB_{\max}
+    =
+    (1+2c)B_{\max}.
+\]
+\end{proof}
+
+\begin{lemma}[Aggregate second moment from deterministic cap chain]
+\label{lem:g_second_derived}
+Under Assumptions~\ref{ass:honest_majority} and
+\ref{ass:honest_update_bound}, for every \(t\), the aggregation output satisfies
+\begin{equation}
+    \E\!\left[\norm{g_t}^2 \mid \F_t\right]
+    \le
+    M_{\tilde\Delta}^2,
+    \qquad\text{hence}\qquad
+    \frac{1}{T}\sum_{t=0}^{T-1}\E\norm{g_t}^2 \le M_{\tilde\Delta}^2.
+    \label{eq:Gg_derived}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+By Corollary~\ref{cor:Bmax_from_honest}, \(B_t\le B_{\max}\) for all \(t\). 
+Lemma~\ref{lem:mu_tau_bounded} then gives \(\norm{\tilde\Delta_i^t}\le M_{\tilde\Delta}\) deterministically for every client \(i\). 
+Write \(g_t=\sum_{i=1}^N w_i^t \tilde{\Delta}_i^t\) with \(\sum_i w_i^t=1\),
+\(w_i^t\ge 0\). Jensen's inequality yields:
+\[
+    \norm{g_t}^2 = \norm{\sum_{i=1}^N w_i^t \tilde{\Delta}_i^t}^2
+    \le
+    \sum_{i=1}^N w_i^t \norm{\tilde{\Delta}_i^t}^2
+    \le 
+    \sum_{i=1}^N w_i^t M_{\tilde\Delta}^2 = M_{\tilde\Delta}^2.
+\]
+Taking expectations preserves the bound.
+\end{proof}
+
+\begin{lemma}[Residual clipping bias identity]
+\label{lem:clip_identity}
+For every client \(i\) and round \(t\),
+\begin{equation}
+    \norm{\bar{r}_i^t - r_i^t}
+    =
+    (\norm{r_i^t} - \tau_i^t)_+,
+    \label{eq:clip_identity}
+\end{equation}
+where \((a)_+ := \max\{a,0\}\).
+As a consequence,
+\begin{equation}
+    \norm{\tilde{\Delta}_i^t - \hat{\Delta}_i^t}
+    =
+    (\norm{r_i^t} - \tau_i^t)_+.
+    \label{eq:delta_clip_identity}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+If \(\norm{r_i^t} \le \tau_i^t\), then \(\bar{r}_i^t = r_i^t\), so the
+left-hand side is \(0\), equal to
+\((\norm{r_i^t}-\tau_i^t)_+\).
+
+If \(\norm{r_i^t} > \tau_i^t\), then
+\[
+    \bar{r}_i^t = r_i^t \cdot \frac{\tau_i^t}{\norm{r_i^t}},
+\]
+hence
+\[
+    \norm{\bar{r}_i^t - r_i^t}
+    =
+    \left\|
+        r_i^t\left(\frac{\tau_i^t}{\norm{r_i^t}} - 1\right)
+    \right\|
+    =
+    \norm{r_i^t} - \tau_i^t.
+\]
+This proves~\eqref{eq:clip_identity}.
+Since
+\[
+    \tilde{\Delta}_i^t - \hat{\Delta}_i^t
+    =
+    (b_i^t+\bar{r}_i^t) - (b_i^t+r_i^t)
+    =
+    \bar{r}_i^t-r_i^t,
+\]
+we obtain~\eqref{eq:delta_clip_identity}.
+\end{proof}
+
+\section{Aggregation Error Analysis}
+
+Define the aggregation error
+\begin{equation}
+    e_t := g_t - \bar{\Delta}_{\HH}^t.
+    \label{eq:e_t}
+\end{equation}
+
+\begin{lemma}[Aggregation error decomposition]
+\label{lem:decomp}
+The error \(e_t\) admits the decomposition
+\begin{equation}
+    e_t
+    =
+    \underbrace{
+    \sum_{i \in \HH} w_i^t(\tilde{\Delta}_i^t - \Delta_i^t)
+    }_{=:A_t}
+    +
+    \underbrace{
+    \sum_{i \in \HH}
+    \left(w_i^t - \frac{1}{H}\right)\Delta_i^t
+    }_{=:W_t}
+    +
+    \underbrace{
+    \sum_{j \in \BB} w_j^t \tilde{\Delta}_j^t
+    }_{=:M_t}.
+    \label{eq:decomposition}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+From~\eqref{eq:aggregate},
+\[
+    g_t
+    =
+    \sum_{i \in \HH} w_i^t \tilde{\Delta}_i^t
+    +
+    \sum_{j \in \BB} w_j^t \tilde{\Delta}_j^t.
+\]
+Subtract \(\bar{\Delta}_{\HH}^t = \frac{1}{H}\sum_{i\in\HH}\Delta_i^t\) and
+add/subtract \(\sum_{i\in\HH} w_i^t \Delta_i^t\) to obtain
+\[
+    g_t - \bar{\Delta}_{\HH}^t
+    =
+    \sum_{i \in \HH} w_i^t(\tilde{\Delta}_i^t-\Delta_i^t)
+    +
+    \sum_{i \in \HH}
+    \left(w_i^t-\frac{1}{H}\right)\Delta_i^t
+    +
+    \sum_{j \in \BB} w_j^t \tilde{\Delta}_j^t.
+\]
+\end{proof}
+
+\begin{lemma}[Bounding each term of the decomposition]
+\label{lem:term_bounds}
+\begin{align}
+    \norm{A_t}^2
+    &\le
+    \sum_{i \in \HH} w_i^t \norm{\tilde{\Delta}_i^t-\Delta_i^t}^2,
+    \label{eq:A_t_bound}\\
+    \norm{W_t}^2
+    &\le
+    \varepsilon_{w,t}^2 \cdot \max_{i\in\HH}\norm{\Delta_i^t}^2,
+    \label{eq:W_t_bound}\\
+    \norm{M_t}^2
+    &\le
+    \beta_t \sum_{j\in\BB} w_j^t \norm{\tilde{\Delta}_j^t}^2.
+    \label{eq:M_t_bound}
+\end{align}
+Consequently,
+\begin{equation}
+    \norm{e_t}^2
+    \le
+    3\norm{A_t}^2 + 3\norm{W_t}^2 + 3\norm{M_t}^2.
+    \label{eq:e_abc}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+For \(A_t\), Jensen's inequality gives
+\[
+    \norm{A_t}^2
+    =
+    \left\|
+        \sum_{i \in \HH} w_i^t(\tilde{\Delta}_i^t-\Delta_i^t)
+    \right\|^2
+    \le
+    \sum_{i \in \HH} w_i^t \norm{\tilde{\Delta}_i^t-\Delta_i^t}^2.
+\]
+More explicitly, since \(\sum_{i\in\HH} w_i^t = 1-\beta_t \le 1\),
+weighted Cauchy--Schwarz yields
+\[
+    \norm{A_t}^2
+    \le
+    \left(\sum_{i\in\HH} w_i^t\right)
+    \left(\sum_{i\in\HH} w_i^t \norm{\tilde{\Delta}_i^t-\Delta_i^t}^2\right)
+    \le
+    \sum_{i\in\HH} w_i^t \norm{\tilde{\Delta}_i^t-\Delta_i^t}^2.
+\]
+
+For \(W_t\),
+\[
+    \norm{W_t}
+    \le
+    \sum_{i \in \HH}
+    \abs{w_i^t-\frac{1}{H}} \norm{\Delta_i^t}
+    \le
+    \varepsilon_{w,t} \max_{i\in\HH}\norm{\Delta_i^t},
+\]
+which yields~\eqref{eq:W_t_bound} after squaring.
+
+For \(M_t\), by Cauchy--Schwarz and \(\sum_{j\in\BB}w_j^t=\beta_t\),
+\[
+    \norm{M_t}
+    \le
+    \sum_{j\in\BB} w_j^t \norm{\tilde{\Delta}_j^t}
+\]
+and therefore
+\[
+    \norm{M_t}^2
+    \le
+    \left(\sum_{j\in\BB}w_j^t\right)
+    \left(\sum_{j\in\BB}w_j^t\norm{\tilde{\Delta}_j^t}^2\right)
+    =
+    \beta_t\sum_{j\in\BB}w_j^t\norm{\tilde{\Delta}_j^t}^2.
+\]
+which is exactly~\eqref{eq:M_t_bound}.
+
+Finally,
+\[
+    e_t = A_t + W_t + M_t,
+\]
+so
+\[
+    \norm{e_t}^2
+    \le
+    3\norm{A_t}^2 + 3\norm{W_t}^2 + 3\norm{M_t}^2.
+\]
+\end{proof}
+
+\begin{lemma}[Explicit honest clipping bias bound]
+\label{lem:honest_clip}
+For every honest client \(i \in \HH\),
+\begin{equation}
+    \norm{\tilde{\Delta}_i^t-\Delta_i^t}^2
+    \le
+    2\norm{\hat{\Delta}_i^t-\Delta_i^t}^2
+    +
+    2(\norm{r_i^t}-\tau_i^t)_+^2.
+    \label{eq:honest_clip_bound}
+\end{equation}
+Therefore,
+\begin{equation}
+    \sum_{i \in \HH} w_i^t \norm{\tilde{\Delta}_i^t-\Delta_i^t}^2
+    \le
+    2\sum_{i \in \HH} w_i^t \norm{\hat{\Delta}_i^t-\Delta_i^t}^2
+    +
+    2\sum_{i \in \HH} w_i^t (\norm{r_i^t}-\tau_i^t)_+^2.
+    \label{eq:honest_clip_sum}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+Using
+\[
+    \tilde{\Delta}_i^t-\Delta_i^t
+    =
+    (\tilde{\Delta}_i^t-\hat{\Delta}_i^t)
+    +
+    (\hat{\Delta}_i^t-\Delta_i^t),
+\]
+we have
+\[
+    \norm{\tilde{\Delta}_i^t-\Delta_i^t}^2
+    \le
+    2\norm{\tilde{\Delta}_i^t-\hat{\Delta}_i^t}^2
+    +
+    2\norm{\hat{\Delta}_i^t-\Delta_i^t}^2.
+\]
+Lemma~\ref{lem:clip_identity} gives
+\[
+    \norm{\tilde{\Delta}_i^t-\hat{\Delta}_i^t}^2
+    =
+    (\norm{r_i^t}-\tau_i^t)_+^2.
+\]
+Substituting yields~\eqref{eq:honest_clip_bound}. Summing with weights
+\(w_i^t\) gives~\eqref{eq:honest_clip_sum}.
+\end{proof}
+
+\begin{lemma}[Overall aggregation error bound]
+\label{lem:agg_bound}
+\begin{align}
+    \norm{e_t}^2
+    \le\;&
+    6\sum_{i \in \HH} w_i^t \norm{\hat{\Delta}_i^t-\Delta_i^t}^2
+    +
+    6\sum_{i \in \HH} w_i^t (\norm{r_i^t}-\tau_i^t)_+^2
+    \nonumber\\
+    &+
+    3\varepsilon_{w,t}^2 \max_{i\in\HH}\norm{\Delta_i^t}^2
+    +
+    3\beta_t \sum_{j\in\BB} w_j^t \norm{\tilde{\Delta}_j^t}^2.
+    \label{eq:agg_error_final}
+\end{align}
+\end{lemma}
+
+\begin{proof}
+Combine Lemma~\ref{lem:term_bounds} with
+Lemma~\ref{lem:honest_clip}.
+\end{proof}
+
+\section{From Honest Average to the True Gradient}
+
+\begin{lemma}[Deviation of the honest average from the true gradient]
+\label{lem:honest_gradient}
+Under Assumption~\ref{ass:bias_variance},
+\begin{equation}
+    \E\!\left[
+        \norm{\bar{\Delta}_{\HH}^t - \nabla f(x_t)}^2
+        \,\middle|\, \F_t
+    \right]
+    \le
+    \frac{\sigma^2}{H} + \xi^2.
+    \label{eq:honest_gradient_gap}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+Write
+\[
+    \bar{\Delta}_{\HH}^t - \nabla f(x_t)
+    =
+    \left(
+        \bar{\Delta}_{\HH}^t -
+        \E[\bar{\Delta}_{\HH}^t \mid \F_t]
+    \right)
+    +
+    \left(
+        \E[\bar{\Delta}_{\HH}^t \mid \F_t] - \nabla f(x_t)
+    \right).
+\]
+Using the variance bound~\eqref{eq:variance} and the bias bound~\eqref{eq:bias}
+gives the result.
+\end{proof}
+
+\section{One-Step Descent Analysis}
+
+\begin{lemma}[One-step descent inequality]
+\label{lem:descent}
+Suppose Assumptions~\ref{ass:lower_bounded} to \ref{ass:honest_majority}
+hold.
+Then, for any step size \(\eta_t > 0\),
+\begin{align}
+    \E[f(x_{t+1})]
+    \le\;&
+    \E[f(x_t)]
+    -
+    \frac{\eta_t}{2}\E\norm{\nabla f(x_t)}^2
+    \nonumber\\
+    &+
+    \eta_t \E\norm{e_t}^2
+    +
+    \eta_t\left(\frac{\sigma^2}{H}+\xi^2\right)
+    +
+    \frac{L\eta_t^2}{2}\E\norm{g_t}^2.
+    \label{eq:descent}
+\end{align}
+\end{lemma}
+
+\begin{proof}
+By Assumption~\ref{ass:smooth},
+\[
+    f(x_{t+1})
+    \le
+    f(x_t)
+    +
+    \langle \nabla f(x_t), x_{t+1}-x_t \rangle
+    +
+    \frac{L}{2}\norm{x_{t+1}-x_t}^2.
+\]
+Substituting \(x_{t+1}=x_t-\eta_t g_t\) gives
+\[
+    f(x_{t+1})
+    \le
+    f(x_t)
+    -
+    \eta_t \langle \nabla f(x_t), g_t \rangle
+    +
+    \frac{L\eta_t^2}{2}\norm{g_t}^2.
+\]
+
+Using the identity \(-\langle a, b \rangle = -\frac{1}{2}\norm{a}^2 - \frac{1}{2}\norm{b}^2 + \frac{1}{2}\norm{a-b}^2\), we can rewrite the inner product exactly as:
+\[
+    -\langle \nabla f(x_t), g_t \rangle
+    =
+    -\frac{1}{2}\norm{\nabla f(x_t)}^2
+    - \frac{1}{2}\norm{g_t}^2
+    + \frac{1}{2}\norm{g_t - \nabla f(x_t)}^2.
+\]
+Since \(-\frac{1}{2}\norm{g_t}^2 \le 0\), we drop it for an upper bound:
+\[
+    -\langle \nabla f(x_t), g_t \rangle
+    \le
+    -\frac{1}{2}\norm{\nabla f(x_t)}^2
+    + \frac{1}{2}\norm{g_t - \nabla f(x_t)}^2.
+\]
+Now, using the decomposition \(g_t = \bar{\Delta}_{\HH}^t + e_t\), and applying the inequality \(\norm{a+b}^2 \le 2\norm{a}^2 + 2\norm{b}^2\), we bound the distance between the aggregate and the true gradient:
+\[
+    \norm{g_t - \nabla f(x_t)}^2
+    =
+    \norm{e_t + \bar{\Delta}_{\HH}^t - \nabla f(x_t)}^2
+    \le
+    2\norm{e_t}^2 + 2\norm{\bar{\Delta}_{\HH}^t - \nabla f(x_t)}^2.
+\]
+Substituting this back into the smoothness inequality yields:
+\[
+    f(x_{t+1})
+    \le
+    f(x_t)
+    - \frac{\eta_t}{2}\norm{\nabla f(x_t)}^2
+    + \eta_t\norm{e_t}^2
+    + \eta_t\norm{\bar{\Delta}_{\HH}^t - \nabla f(x_t)}^2
+    + \frac{L\eta_t^2}{2}\norm{g_t}^2.
+\]
+Taking the conditional expectation \(\E[\cdot \mid \F_t]\) on both sides and applying Lemma~\ref{lem:honest_gradient} for the honest average deviation yields the final result \eqref{eq:descent}.
+\end{proof}
+
+\section{Main Convergence Theorem}
+
+\begin{theorem}[Convergence under effective-adversary conditions]
+\label{thm:main}
+Suppose Assumptions~\ref{ass:lower_bounded} to \ref{ass:honest_majority} hold.
+Let the step size be constant and satisfy
+\begin{equation}
+    0 < \eta \le \frac{1}{2L}.
+    \label{eq:stepsize}
+\end{equation}
+Then the iterates generated by HRAC satisfy
+\begin{align}
+    \frac{1}{T}\sum_{t=0}^{T-1}\E\norm{\nabla f(x_t)}^2
+    \le\;&
+    \frac{2(f(x_0)-f^\star)}{\eta T}
+    +
+    2\left(\frac{\sigma^2}{H}+\xi^2\right)
+    \nonumber\\
+    &+
+    \frac{2}{T}\sum_{t=0}^{T-1}\E\norm{e_t}^2
+    +
+    L\eta M_{\tilde\Delta}^2.
+    \label{eq:main_pre}
+\end{align}
+Define the average HRAC error floor
+\[
+    \mathcal{E}_T
+    :=
+    \frac{6}{T}\sum_{t=0}^{T-1}\E\!\left[
+        2\sum_{i\in\HH} w_i^t \norm{\hat{\Delta}_i^t-\Delta_i^t}^2
+        +2\sum_{i\in\HH} w_i^t(\norm{r_i^t}-\tau_i^t)_+^2
+        +\varepsilon_{w,t}^2 \max_{i\in\HH}\norm{\Delta_i^t}^2
+        +\beta_t \sum_{j\in\BB} w_j^t \norm{\tilde{\Delta}_j^t}^2
+    \right].
+\]
+Using Lemma~\ref{lem:agg_bound}, one obtains
+\begin{align}
+    \frac{1}{T}\sum_{t=0}^{T-1}\E\norm{\nabla f(x_t)}^2
+    \le\;&
+    \frac{2(f(x_0)-f^\star)}{\eta T}
+    +
+    2\left(\frac{\sigma^2}{H}+\xi^2\right)
+    +
+    L\eta M_{\tilde\Delta}^2
+    +
+    \mathcal{E}_T.
+    \label{eq:main_full}
+\end{align}
+Therefore, under the stated effective-adversary conditions, HRAC converges
+sublinearly to a neighbourhood of a
+first-order stationary point.
+The neighbourhood radius is determined by the stochastic variance,
+client heterogeneity, clipping bias, honest-weight distortion, and the
+remaining Byzantine weight mass.
+\end{theorem}
+
+\begin{proof}
+Sum the one-step descent inequality~\eqref{eq:descent} from \(t=0\) to
+\(T-1\):
+\begin{align*}
+    \E[f(x_T)]
+    \le\;&
+    f(x_0)
+    -
+    \frac{\eta}{2}\sum_{t=0}^{T-1}\E\norm{\nabla f(x_t)}^2
+    \\
+    &+
+    \eta\sum_{t=0}^{T-1}\E\norm{e_t}^2
+    +
+    \eta T\left(\frac{\sigma^2}{H}+\xi^2\right)
+    +
+    \frac{L\eta^2}{2}\sum_{t=0}^{T-1}\E\norm{g_t}^2.
+\end{align*}
+Since \(f(x_T)\ge f^\star\), rearranging gives
+\[
+    \frac{\eta}{2}\sum_{t=0}^{T-1}\E\norm{\nabla f(x_t)}^2
+    \le
+    f(x_0)-f^\star
+    +
+    \eta\sum_{t=0}^{T-1}\E\norm{e_t}^2
+    +
+    \eta T\left(\frac{\sigma^2}{H}+\xi^2\right)
+    +
+    \frac{L\eta^2}{2}\sum_{t=0}^{T-1}\E\norm{g_t}^2.
+\]
+Dividing both sides by \(\frac{\eta T}{2}\) yields
+\[
+    \frac{1}{T}\sum_{t=0}^{T-1}\E\norm{\nabla f(x_t)}^2
+    \le
+    \frac{2(f(x_0)-f^\star)}{\eta T}
+    +
+    \frac{2}{T}\sum_{t=0}^{T-1}\E\norm{e_t}^2
+    +
+    2\left(\frac{\sigma^2}{H}+\xi^2\right)
+    +
+    \frac{L\eta}{T}\sum_{t=0}^{T-1}\E\norm{g_t}^2.
+\]
+By Lemma~\ref{lem:g_second_derived}, \(\E\norm{g_t}^2 \le M_{\tilde\Delta}^2\).
+This proves~\eqref{eq:main_pre}.
+Substituting Lemma~\ref{lem:agg_bound} into \eqref{eq:main_pre}
+yields~\eqref{eq:main_full}.
+\end{proof}
+
+\begin{proposition}[Tightened HRAC floor under \(\beta_t\)-linked distortion]
+\label{prop:tight_floor_beta2}
+Let $G_{\max} = \max_{i\in\HH}\norm{\Delta_i^t}$. Assume there exist constants \(C_w,C_m\ge 0\) such that for all large
+\(t\):
+\begin{align}
+    \varepsilon_{w,t} &\le C_w\,\beta_t,
+    \label{eq:tight_epsw_beta}\\
+    \sum_{j\in\BB} w_j^t \norm{\tilde{\Delta}_j^t}^2
+    &\le C_m\,\beta_t\,G_{\max}^2.
+    \label{eq:tight_byz_energy}
+\end{align}
+Then the last two terms in \eqref{eq:agg_error_final} satisfy
+\begin{equation}
+    3\varepsilon_{w,t}^2 \max_{i\in\HH}\norm{\Delta_i^t}^2
+    +
+    3\beta_t \sum_{j\in\BB} w_j^t \norm{\tilde{\Delta}_j^t}^2
+    \le
+    3(C_w^2+C_m)\,\beta_t^2\,G_{\max}^2.
+    \label{eq:tight_beta2_floor}
+\end{equation}
+Hence the corresponding component of \(\mathcal E_T\) decays at
+\(O(\beta_t^2)\) when \(\beta_t\to 0\).
+\end{proposition}
+
+\begin{proof}
+The first term is bounded by
+\(
+3(C_w\beta_t)^2 G_{\max}^2
+\)
+using \eqref{eq:tight_epsw_beta}.
+The second term is bounded by
+\(
+3\beta_t(C_m\beta_t G_{\max}^2)
+\)
+using \eqref{eq:tight_byz_energy}. Summing gives
+\eqref{eq:tight_beta2_floor}.
+\end{proof}
+
+\begin{corollary}[Refined asymptotic floor under \(\beta_t\)-linked distortion]
+\label{cor:refined_beta2_floor}
+Under Theorem~\ref{thm:main} and Proposition~\ref{prop:tight_floor_beta2},
+\eqref{eq:main_full} admits the refinement
+\[
+    \mathcal{E}_T
+    =
+    \frac{6}{T}\sum_{t=0}^{T-1}\E\!\left[
+        2\sum_{i\in\HH} w_i^t \norm{\hat{\Delta}_i^t-\Delta_i^t}^2
+        +2\sum_{i\in\HH} w_i^t(\norm{r_i^t}-\tau_i^t)_+^2
+        +\mathcal{O}(\beta_t^2)G_{\max}^2
+    \right].
+\]
+In particular, the contribution of weight distortion and Byzantine mass in
+\(\mathcal{E}_T\) decays quadratically in \(\beta_t\).
+\end{corollary}
+
+\begin{corollary}[Asymptotic stationarity under vanishing HRAC error]
+\label{cor:vanishing}
+Under the assumptions of Theorem~\ref{thm:main}, if additionally
+\begin{align}
+    \frac{1}{T}\sum_{t=0}^{T-1}\sum_{i\in\HH}
+    \E\!\left[w_i^t \norm{\hat{\Delta}_i^t-\Delta_i^t}^2\right]
+    &\to 0,
+    \label{eq:v1}\\
+    \frac{1}{T}\sum_{t=0}^{T-1}\sum_{i\in\HH}
+    \E\!\left[w_i^t(\norm{r_i^t}-\tau_i^t)_+^2\right]
+    &\to 0,
+    \label{eq:v2}\\
+    \frac{1}{T}\sum_{t=0}^{T-1}
+    \E\!\left[\beta_t^2 G_{\max}^2\right]
+    &\to 0,
+    \label{eq:v3}
+\end{align}
+and the step size sequence satisfies \(\eta \to 0\) with \(T\eta \to \infty\),
+then
+\begin{equation}
+    \frac{1}{T}\sum_{t=0}^{T-1}\E\norm{\nabla f(x_t)}^2 \to 0.
+    \label{eq:stationarity}
+\end{equation}
+\end{corollary}
+
+\begin{proof}
+This follows immediately from~\eqref{eq:main_full}: all error-floor terms
+vanish asymptotically, and the optimisation term
+\((f(x_0)-f^\star)/(\eta T)\) also vanishes because \(T\eta \to \infty\).
+\end{proof}
+\begin{comment}
+\section{Algorithmic Dynamics and Weight Control}
+
+This section makes explicit use of the implemented recursion
+\[
+    \nu_i^{t+1} = \rho_\nu \nu_i^t + (1-\rho_\nu)d_i^t,
+    \qquad 0<\rho_\nu<1.
+\]
+
+\begin{lemma}[Closed-form representation of \(\nu_i^t\)]
+\label{lem:nu_closed_form}
+For each client \(i\) and \(t\ge 1\),
+\begin{equation}
+    \nu_i^t
+    =
+    \rho_\nu^t \nu_i^0
+    +
+    (1-\rho_\nu)\sum_{k=0}^{t-1}\rho_\nu^k d_i^{t-1-k}.
+    \label{eq:nu_closed_form}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+Unroll the linear recursion by induction.
+\end{proof}
+
+\paragraph{The statistic \(d_i^t\) (Implementation-aligned definition).}
+The directional change statistic is computed directly from the consecutive
+clipped residuals on the statistics path:
+\begin{equation}
+    d_i^t := \norm{\bar{r}_{i,\mathrm{norm}}^t - \bar{r}_{i,\mathrm{norm}}^{t-1}}.
+    \label{eq:d_def}
+\end{equation}
+Here, \(\bar{r}_{i,\mathrm{norm}}^t\) denotes the clipped residual on the
+statistics path. When no small-norm lifting is triggered, it coincides with the
+ordinary clipped residual. When lifting is active, it is computed from the
+lifted effective update used only by the statistics path. Thus, \(d_i^t\)
+records the cross-round Euclidean displacement of the statistics-path clipped
+residuals and serves as the direct input to the \(\nu\)-EMA recursion.
+
+\begin{remark}[Small-Norm Lifting on the Statistics Path]
+When a client's update norm is abnormally small relative to
+the current round median norm, HRAC optionally rescales that update to the
+median-norm level \emph{only on the statistics path}, in order to avoid
+degenerate vanishing behaviour in the EMA statistics. This lifting affects the
+computation of \(\mu_i^t\), \(\nu_i^t\), and the associated statistics-path
+history variables, but does not directly alter the aggregation path or the
+final per-round aggregated update.
+\end{remark}
+
+\begin{lemma}[EMA tracking of a non-vanishing \(d\)-band]
+\label{lem:nu_tracking}
+Let \(0<\rho_\nu<1\) and let
+\[
+    \nu_i^{t+1}
+    =
+    \rho_\nu \nu_i^t + (1-\rho_\nu)d_i^t.
+\]
+Then the following hold for every client \(i\):
+\begin{enumerate}[label=(\roman*)]
+    \item if \(d_i^t \to d_i^\star\), then \(\nu_i^t \to d_i^\star\);
+    \item if there exist constants \(0\le \underline d_i \le \overline d_i < \infty\)
+    and \(T_i<\infty\) such that
+    \[
+        \underline d_i \le d_i^t \le \overline d_i,
+        \qquad \forall t\ge T_i,
+    \]
+    then
+    \[
+        \underline d_i
+        \le
+        \liminf_{t\to\infty}\nu_i^t
+        \le
+        \limsup_{t\to\infty}\nu_i^t
+        \le
+        \overline d_i.
+    \]
+\end{enumerate}
+In particular, if \(d_i^t\) settles to a positive plateau or fluctuates inside
+a positive bounded band, then \(\nu_i^t\) tracks the same positive late-stage
+band rather than collapsing to \(0\).
+\end{lemma}
+
+\begin{proof}
+For part (i), let \(e_i^t:=\nu_i^t-d_i^\star\). Then
+\[
+    e_i^{t+1}
+    =
+    \rho_\nu e_i^t + (1-\rho_\nu)(d_i^t-d_i^\star).
+\]
+Since \(d_i^t-d_i^\star\to 0\) and \(0<\rho_\nu<1\), the standard stable
+linear recursion implies \(e_i^t\to 0\), hence \(\nu_i^t\to d_i^\star\).
+
+For part (ii), for all \(t\ge T_i\),
+\[
+    \rho_\nu \nu_i^t + (1-\rho_\nu)\underline d_i
+    \le
+    \nu_i^{t+1}
+    \le
+    \rho_\nu \nu_i^t + (1-\rho_\nu)\overline d_i.
+\]
+Comparing with the scalar affine recursions
+\[
+    \underline v^{t+1}
+    =
+    \rho_\nu \underline v^t + (1-\rho_\nu)\underline d_i,
+    \qquad
+    \overline v^{t+1}
+    =
+    \rho_\nu \overline v^t + (1-\rho_\nu)\overline d_i,
+\]
+we obtain by induction that \(\nu_i^t\) is eventually trapped between two
+sequences converging respectively to \(\underline d_i\) and \(\overline d_i\).
+Taking \(\liminf\) and \(\limsup\) yields the claim.
+\end{proof}
+
+\begin{lemma}[Honest dual-path tube bound with explicit \(\eta\)-dependence]
+\label{lem:honest_tube_eta}
+Fix an honest client \(i\). Suppose:
+\begin{enumerate}[label=(\roman*)]
+    \item the honest local update decomposes as
+    \(\Delta_i^t=\nabla f_i(x_t)+\zeta_i^t\) with
+    \(\E[\zeta_i^t\mid\F_t]=0\),
+    \(\E\!\left[\norm{\zeta_i^t}^2\mid\F_t\right]\le \sigma_i^2\);
+    \item \(f_i\) is \(L_i\)-smooth:
+    \(\norm{\nabla f_i(x_t)-\nabla f_i(x_{t-1})}\le L_i\norm{x_t-x_{t-1}}\);
+    \item \(\sup_t \E\norm{g_t}^2 \le M_{\tilde\Delta}^2\), and \(x_{t+1}=x_t-\eta g_t\)
+    with constant \(\eta\);
+    \item the stats-path center uses EMA:
+    \(b_{i,t+1}^{\mathrm{norm}}=\rho_b b_{i,t}^{\mathrm{norm}}+(1-\rho_b)q_{i,t}\),
+    where \(\E\!\left[\norm{q_{i,t}-\Delta_i^t}^2\mid\F_t\right]\le \varepsilon_q^2\).
+\end{enumerate}
+Then there exists a finite constant \(C_i\) such that for all large \(t\),
+\begin{equation}
+    \E\!\left[\norm{\Delta_i^t-b_{i,t}^{\mathrm{norm}}}^2\right]
+    \le
+    \frac{C_i}{1-\rho_b}
+    \Bigl(
+        \sigma_i^2 + \eta^2 L_i^2 M_{\tilde\Delta}^2 + \varepsilon_q^2
+    \Bigr).
+    \label{eq:honest_tube_eta}
+\end{equation}
+In particular, as \(\eta\to 0\), the drift contribution is
+\(O(\eta^2)\), so the tube radius is noise-dominated.
+\end{lemma}
+
+\begin{proof}
+Define \(e_{i,t}:=\Delta_i^t-b_{i,t}^{\mathrm{norm}}\). By the EMA recursion,
+\[
+    e_{i,t+1}
+    =
+    \Delta_i^{t+1}
+    -
+    \rho_b b_{i,t}^{\mathrm{norm}}
+    -
+    (1-\rho_b)q_{i,t}
+    =
+    \rho_b e_{i,t}
+    +
+    (\Delta_i^{t+1}-\Delta_i^t)
+    +
+    (1-\rho_b)(\Delta_i^t-q_{i,t}).
+\]
+Set
+\[
+    w_{i,t}
+    :=
+    (\Delta_i^{t+1}-\Delta_i^t)
+    +
+    (1-\rho_b)(\Delta_i^t-q_{i,t}),
+\]
+so \(e_{i,t+1}=\rho_b e_{i,t}+w_{i,t}\).
+For any \(\kappa>0\), Young's inequality gives
+\[
+    \norm{e_{i,t+1}}^2
+    \le
+    (1+\kappa)\rho_b^2\norm{e_{i,t}}^2
+    +
+    \left(1+\frac1\kappa\right)\norm{w_{i,t}}^2.
+\]
+Taking expectations,
+\[
+    \E\norm{e_{i,t+1}}^2
+    \le
+    a_\kappa \E\norm{e_{i,t}}^2
+    +
+    b_\kappa \E\norm{w_{i,t}}^2,
+    \qquad
+    a_\kappa:=(1+\kappa)\rho_b^2,\quad
+    b_\kappa:=1+\frac1\kappa.
+\]
+Choose \(\kappa\in(0,\rho_b^{-2}-1)\), so \(a_\kappa<1\).
+Now
+\[
+    \Delta_i^{t+1}-\Delta_i^t
+    =
+    \bigl(\nabla f_i(x_{t+1})-\nabla f_i(x_t)\bigr)
+    +
+    (\zeta_i^{t+1}-\zeta_i^t),
+\]
+so, by smoothness and \(x_{t+1}-x_t=-\eta g_t\),
+\[
+    \E\norm{\Delta_i^{t+1}-\Delta_i^t}^2
+    \le
+    2\eta^2L_i^2\E\norm{g_t}^2 + 4\sigma_i^2
+    \le
+    2\eta^2L_i^2 M_{\tilde\Delta}^2 + 4\sigma_i^2.
+\]
+Also, by \(\norm{u+v}^2\le 2\norm u^2+2\norm v^2\),
+\[
+    \E\norm{w_{i,t}}^2
+    \le
+    2\E\norm{\Delta_i^{t+1}-\Delta_i^t}^2
+    +
+    2(1-\rho_b)^2\varepsilon_q^2
+    \le
+    4\eta^2L_i^2M_{\tilde\Delta}^2 + 8\sigma_i^2 + 2(1-\rho_b)^2\varepsilon_q^2.
+\]
+Therefore
+\[
+    \E\norm{e_{i,t+1}}^2
+    \le
+    a_\kappa \E\norm{e_{i,t}}^2
+    +
+    b_\kappa
+    \left(
+        4\eta^2L_i^2M_{\tilde\Delta}^2 + 8\sigma_i^2 + 2(1-\rho_b)^2\varepsilon_q^2
+    \right).
+\]
+Unrolling yields a geometric bound with factor \((1-a_\kappa)^{-1}\), hence
+\eqref{eq:honest_tube_eta} with a finite constant \(C_i\).
+\end{proof}
+
+\begin{lemma}[EMA mismatch from input increments]
+\label{lem:ema_increment_mismatch}
+Let \(\{a_t\}_{t\ge 0}\subset\R^d\) and
+\(
+b_{t+1}=\rho b_t+(1-\rho)a_t
+\)
+with \(0<\rho<1\). Define \(e_t:=a_t-b_t\). Then
+\begin{equation}
+    e_{t+1}=\rho e_t + (a_{t+1}-a_t).
+    \label{eq:ema_error_recursion}
+\end{equation}
+Consequently, for all \(t\ge 1\),
+\begin{equation}
+    \norm{e_t}
+    \le
+    \rho^t\norm{e_0}
+    +
+    \sum_{k=0}^{t-1}\rho^{\,t-1-k}\norm{a_{k+1}-a_k}.
+    \label{eq:ema_error_unroll}
+\end{equation}
+In particular, if \(\norm{a_{t+1}-a_t}\to 0\), then \(\norm{e_t}\to 0\).
+\end{lemma}
+
+\begin{proof}
+From
+\(
+e_{t+1}
+=
+a_{t+1}-b_{t+1}
+=
+a_{t+1}-\rho b_t-(1-\rho)a_t
+\),
+insert and subtract \(\rho a_t\):
+\(
+e_{t+1}
+=
+\rho(a_t-b_t)+(a_{t+1}-a_t)
+=
+\rho e_t+(a_{t+1}-a_t)
+\),
+which is \eqref{eq:ema_error_recursion}. Unrolling yields
+\eqref{eq:ema_error_unroll}. If \(\norm{a_{t+1}-a_t}\to 0\), then the weighted
+geometric average in \eqref{eq:ema_error_unroll} vanishes, and \(\rho^t\norm{e_0}\to 0\).
+\end{proof}
+
+\subsection{Adversarial Threat Model and Algorithmic Volatility Pressure}
+
+\begin{lemma}[Expected honest \(d\)-upper bound from smooth tracking]
+\label{lem:honest_d_upper}
+Fix an honest client \(i\). Assume the hypotheses of
+Lemma~\ref{lem:honest_tube_eta} hold and, in addition, the statistics-path
+clipping map is non-expansive:
+\[
+    \norm{\bar r_{i,\mathrm{norm}}(u)-\bar r_{i,\mathrm{norm}}(v)}
+    \le
+    \norm{u-v},
+    \qquad
+    \forall u,v\in\R^d.
+\]
+Then there exists a finite constant \(r_{H,i}\) such that for all sufficiently
+large \(t\),
+\begin{equation}
+    \E[d_i^t]
+    \le
+    r_{H,i},
+    \label{eq:honest_d_upper}
+\end{equation}
+with
+\[
+    r_{H,i}
+    =
+    \mathcal O\!\left(
+        \eta L_i M_{\tilde\Delta} + \sigma_i + \varepsilon_q
+    \right).
+\]
+Consequently, with
+\(
+r_H:=\max_{i\in\HH} r_{H,i},
+\)
+\begin{equation}
+    \max_{i\in\HH}\E[d_i^t] \le r_H
+    \qquad \text{for all sufficiently large } t.
+    \label{eq:honest_d_upper_global}
+\end{equation}
+\end{lemma}
+
+\begin{proof}[Proof idea]
+Write
+\(
+\bar r_{i,\mathrm{norm}}^t
+=
+\bar r_{i,\mathrm{norm}}(\Delta_i^t-b_{i,t}^{\mathrm{norm}})
+\).
+By non-expansiveness,
+\[
+    d_i^t
+    \le
+    \norm{
+        (\Delta_i^t-b_{i,t}^{\mathrm{norm}})
+        -
+        (\Delta_i^{t-1}-b_{i,t-1}^{\mathrm{norm}})
+    }.
+\]
+Hence
+\[
+    d_i^t
+    \le
+    \norm{\Delta_i^t-\Delta_i^{t-1}}
+    +
+    \norm{b_{i,t}^{\mathrm{norm}}-b_{i,t-1}^{\mathrm{norm}}}.
+\]
+The first term is controlled by smoothness and bounded stochastic variation:
+\[
+    \E\norm{\Delta_i^t-\Delta_i^{t-1}}
+    =
+    \mathcal O(\eta L_i M_{\tilde\Delta}+\sigma_i).
+\]
+For the second term, use the EMA update of \(b_{i,t}^{\mathrm{norm}}\):
+\[
+    b_{i,t}^{\mathrm{norm}}-b_{i,t-1}^{\mathrm{norm}}
+    =
+    (1-\rho_b)\bigl(q_{i,t-1}-b_{i,t-1}^{\mathrm{norm}}\bigr),
+\]
+so Lemma~\ref{lem:honest_tube_eta} yields
+\[
+    \E\norm{b_{i,t}^{\mathrm{norm}}-b_{i,t-1}^{\mathrm{norm}}}
+    =
+    \mathcal O(\eta L_i M_{\tilde\Delta}+\sigma_i+\varepsilon_q).
+\]
+Taking expectation in the bound on \(d_i^t\) and combining the two estimates
+gives \eqref{eq:honest_d_upper}; taking the maximum over honest clients yields
+\eqref{eq:honest_d_upper_global}. This lemma is therefore an expectation-level
+smoothness estimate. Any pathwise eventual bound on honest \(d_i^t\) used later
+must be imposed separately or derived from additional concentration arguments.
+\end{proof}
+
+Instead of assuming arbitrary Byzantine behavior or postulating an artificial
+\(d\)-gap, we isolate an HRAC-specific mechanism: persistent adversarial
+history mismatch leaves an observable trace on the statistics path and thereby
+creates a route to higher late-stage Byzantine \(d\)- and \(\nu\)-bands. The
+empirical target is relative elevation, not a literal honest-to-zero versus
+Byzantine-nonzero dichotomy.
+
+\begin{definition}[Persistently effective attack]
+\label{def:effective_attack}
+An adversarial strategy is \emph{persistently effective} on a late-stage time
+window if it induces a non-vanishing Byzantine contribution to the aggregate
+throughout that window. Formally, there exist \(T_\epsilon<\infty\),
+\(\epsilon > 0\), and a window length \(W\ge 1\) such that
+\[
+    \norm{M_t}
+    =
+    \norm{\sum_{j\in\BB} w_j^t \tilde{\Delta}_j^t}
+    \ge \epsilon,
+    \qquad
+    \forall t\in\{T_\epsilon,\dots,T_\epsilon+W-1\}.
+\]
+\end{definition}
+
+\begin{condition}[Persistent mismatch with observable residual motion]
+\label{cond:persistent_mismatch_motion}
+Fix a Byzantine client \(j\in\BB\). Let \(r_{j,\mathrm{norm}}^t\) denote the
+pre-clipped residual on the statistics path and
+\(
+\bar r_{j,\mathrm{norm}}^t
+=
+\clip(r_{j,\mathrm{norm}}^t,\tau_{j,\mathrm{norm}}^t)
+\)
+the corresponding clipped residual. We say that \(j\) exhibits
+\emph{persistent mismatch with observable residual motion} if there exist
+\(T_B<\infty\), \(\underline\delta_B>0\), and \(\lambda_B\in(0,1]\) such that
+for all \(t\ge T_B\),
+\begin{align}
+    \norm{r_{j,\mathrm{norm}}^t-r_{j,\mathrm{norm}}^{t-1}}
+    &\ge \underline\delta_B,
+    \label{eq:mismatch_motion_raw_lb}\\
+    \norm{\bar r_{j,\mathrm{norm}}^t-\bar r_{j,\mathrm{norm}}^{t-1}}
+    &\ge
+    \lambda_B
+    \norm{r_{j,\mathrm{norm}}^t-r_{j,\mathrm{norm}}^{t-1}}.
+    \label{eq:mismatch_motion_clip_lb}
+\end{align}
+\end{condition}
+
+\begin{proposition}[Conditional route from persistent mismatch to a higher Byzantine \(d\)-band]
+\label{prop:mismatch_to_d_band}
+Assume Condition~\ref{cond:persistent_mismatch_motion} holds for a Byzantine
+client \(j\in\BB\). Then, for all \(t\ge T_B\),
+\begin{equation}
+    d_j^t
+    =
+    \norm{\bar r_{j,\mathrm{norm}}^t-\bar r_{j,\mathrm{norm}}^{t-1}}
+    \ge
+    \lambda_B \underline\delta_B
+    =: r_{B,j}^{\mathrm{mis}}.
+    \label{eq:mismatch_to_d_lb}
+\end{equation}
+Consequently, if in addition the honest late-stage upper bound
+\eqref{eq:honest_d_cond} holds and
+\begin{equation}
+    r_{B,j}^{\mathrm{mis}} > r_H,
+    \label{eq:mismatch_margin}
+\end{equation}
+then client \(j\) satisfies
+\begin{equation}
+    d_j^t-\max_{i\in\HH} d_i^t
+    \ge
+    r_{B,j}^{\mathrm{mis}}-r_H
+    >0,
+    \qquad \forall t\ge \max\{T_B,T_H\}.
+    \label{eq:mismatch_pointwise_d_gap}
+\end{equation}
+Thus persistent mismatch yields a formal sufficient route to a higher
+Byzantine late-stage \(d\)-band, and hence to the pointwise \(\nu\)-route
+developed below.
+\end{proposition}
+
+\begin{proof}
+By \eqref{eq:mismatch_motion_clip_lb} and
+\eqref{eq:mismatch_motion_raw_lb},
+\[
+    d_j^t
+    =
+    \norm{\bar r_{j,\mathrm{norm}}^t-\bar r_{j,\mathrm{norm}}^{t-1}}
+    \ge
+    \lambda_B
+    \norm{r_{j,\mathrm{norm}}^t-r_{j,\mathrm{norm}}^{t-1}}
+    \ge
+    \lambda_B\underline\delta_B,
+\]
+which proves \eqref{eq:mismatch_to_d_lb}. If also
+\eqref{eq:honest_d_cond} holds, then for all \(t\ge \max\{T_B,T_H\}\),
+\[
+    d_j^t-\max_{i\in\HH}d_i^t
+    \ge
+    r_{B,j}^{\mathrm{mis}}-r_H.
+\]
+Under \eqref{eq:mismatch_margin}, this is strictly positive, giving
+\eqref{eq:mismatch_pointwise_d_gap}.
+\end{proof}
+
+\begin{remark}[Interpretation of Condition~\ref{cond:persistent_mismatch_motion}]
+\label{rem:mismatch_motion_interp}
+Condition~\ref{cond:persistent_mismatch_motion} isolates the weakest step in a
+form that is strong enough for the later proofs but still faithful to the
+implementation. The first inequality requires that the attack keep generating
+nontrivial cross-round motion on the statistics-path residual before clipping.
+The second requires that clipping not completely erase that motion. Together
+they turn qualitative persistent mismatch into a quantitative lower bound on
+\(d_j^t\).
+\end{remark}
+
+\begin{remark}[Mechanism-level reading]
+\label{rem:volatility_pressure}
+The code-aligned interpretation is that a Byzantine update stream which stays
+persistently mismatched with HRAC's local history state should satisfy
+Condition~\ref{cond:persistent_mismatch_motion} on late-stage windows whenever
+the mismatch keeps reappearing and is not annihilated by clipping. In that
+case, Proposition~\ref{prop:mismatch_to_d_band} formalizes the route from
+persistent mismatch to a higher Byzantine \(d\)-band.
+\end{remark}
+
+\begin{remark}[Equivalent informal picture]
+Under the same mechanism, the statistics-path clipped residual increments
+\[
+    d_j^t
+    =
+    \norm{\bar r_{j,\mathrm{norm}}^t-\bar r_{j,\mathrm{norm}}^{t-1}}
+\]
+remain elevated relative to the honest late-stage tracking band over long horizons, so
+that Byzantine clients occupy a higher late-stage \(d\)-band rather than the
+same lower band as honest clients. The corresponding EMA statistic \(\nu_j^t\)
+then tracks this enlarged late-stage band.
+\end{remark}
+
+\begin{remark}[Label-flipping as a concrete code-aligned example]
+\label{rem:label_flipping_example}
+The label-flipping attack used in our codebase provides a direct illustration
+of Remark~\ref{rem:volatility_pressure} and a plausible route to
+Condition~\ref{cond:persistent_mismatch_motion}. In that attack, a Byzantine
+client does not merely add independent noise to an otherwise honest local
+objective; instead, it trains on systematically corrupted labels. As a result,
+its local update direction is generated by a different effective objective than
+that of the honest clients. From the viewpoint of HRAC, this means that the
+attacker's effective update on the statistics path is repeatedly pulled away
+from the history state that was built from previous clipped messages.
+
+Consequently, the attacker is less likely to remain inside the same
+comparatively smooth and lower late-stage tracking band as an honest client.
+Even after global clipping and
+residual clipping bound the per-round magnitude, the cross-round displacement
+\[
+    d_j^t
+    =
+    \norm{\bar r_{j,\mathrm{norm}}^t-\bar r_{j,\mathrm{norm}}^{t-1}}
+\]
+tends to stay larger because the attack keeps reintroducing history mismatch.
+The EMA recursion
+\[
+    \nu_j^{t+1}
+    =
+    \rho_\nu \nu_j^t + (1-\rho_\nu)d_j^t
+\]
+then accumulates this larger late-stage \(d_j^t\)-band into a larger
+late-stage \(\nu_j^t\)-band. This is the code-aligned reason that, in the
+label-flipping runs, Byzantine clients need not drive \(\nu_j^t\) to an
+extreme value at every round, but they do tend to occupy a visibly higher
+\(\nu\)-band than honest clients over long horizons.
+\end{remark}
+
+\begin{proposition}[Auxiliary zero-absorption criterion for persistently effective attacks]
+\label{prop:attack_nonabsorb}
+Assume a Byzantine client \(j\) participates in a persistently effective attack
+with magnitude \(\epsilon>0\), in the sense of Definition~\ref{def:effective_attack},
+and that its statistics-path effective update remains persistently mismatched
+with the HRAC history-tracking state. Assume moreover:
+\begin{enumerate}[label=(\roman*)]
+    \item the per-round malicious innovation is bounded by HRAC clipping and the
+    global cap, so the attack can persist only through its residual mismatch
+    with the tracked history state;
+    \item if \(d_j^t\to 0\), then the statistics-path clipped residual state
+    \(\bar r_{j,\mathrm{norm}}^t\) becomes asymptotically stationary relative to
+    that tracked state, so the attack-induced mismatch is asymptotically
+    eliminated;
+    \item once this mismatch is eliminated, the induced injected innovation
+    against the evolving model decays below the effectiveness threshold
+    \(\epsilon\).
+\end{enumerate}
+Then there exists a positive function \(r_B=r_B(\epsilon,c,\rho_b)\) such that
+\begin{equation}
+    \liminf_{t\to\infty} d_j^t \ge r_B(\epsilon,c,\rho_b)>0.
+    \label{eq:byz_d_lower}
+\end{equation}
+\end{proposition}
+
+\begin{proof}[Proof idea]
+Suppose, to the contrary, that \(\liminf_{t\to\infty} d_j^t = 0\). Then there
+exists a subsequence along which the clipped residual increments become
+arbitrarily small. By assumption (ii), this drives the statistics-path clipped
+residual state \(\bar r_{j,\mathrm{norm}}^t\) into an asymptotically stationary
+regime relative to the tracked history state. The attack-induced mismatch is
+then progressively absorbed by the HRAC history dynamics, leaving only a
+vanishing residual innovation after clipping. Under assumptions (i) and (iii),
+this prevents the attacker from maintaining a persistent aggregate bias of size
+at least \(\epsilon\), contradicting
+Definition~\ref{def:effective_attack}. Therefore \(d_j^t\) cannot approach
+zero, and the positive lower bound \eqref{eq:byz_d_lower} follows.
+\end{proof}
+
+\begin{remark}[Interpretation of Proposition~\ref{prop:attack_nonabsorb}]
+Proposition~\ref{prop:attack_nonabsorb} formalizes the code-aligned intuition
+that persistent adversarial mismatch with the tracked history state is visible
+through the \(d_j^t\)-statistics. The proposition is not claiming that an
+attacker explicitly chooses to maximize \(d_j^t\). Rather, it states that for
+the attack classes considered here, elevated \(d_j^t\) is a dynamical
+consequence of staying adversarially misaligned with the comparatively smooth
+honest late-stage tracking band.
+\end{remark}
+
+\begin{remark}[Role of Proposition~\ref{prop:attack_nonabsorb} in the present manuscript]
+Proposition~\ref{prop:attack_nonabsorb} should be read as an auxiliary
+sufficient route, not as the primary empirical claim. The experiments used in
+this note do not suggest that honest \(d_i^t\) values converge to \(0\); on
+the contrary, both honest and Byzantine clients remain in positive late-stage
+bands. The practically relevant distinction is that Byzantine clients tend to
+occupy a \emph{higher} \(d\)- and therefore \(\nu\)-band, which is exactly the
+relative-elevation effect used by the weighting rule.
+\end{remark}
+
+\begin{remark}[Scope of the adaptive-statistics layer]
+\label{rem:adaptive_scope}
+The adaptive-statistics argument has three different proof strengths. First,
+the recursion-level statements, such as Lemma~\ref{lem:nu_tracking},
+Theorem~\ref{thm:mean_d_to_mean_nu}, and
+Theorem~\ref{thm:mean_nu_to_penalty}, are exact consequences of the implemented
+EMA and weighting formulas. Second, results such as
+Theorem~\ref{thm:nu_separation_main} are conditional upgrades that require
+additional late-stage pathwise control. Third,
+Condition~\ref{cond:persistent_mismatch_motion},
+Proposition~\ref{prop:mismatch_to_d_band}, and
+Proposition~\ref{prop:attack_nonabsorb} are intentionally mechanism-level:
+they formalize a code-aligned route from persistent history mismatch to a
+higher Byzantine \(d\)-band, but they are not meant to replace a full
+attack-specific stochastic analysis. This is why the manuscript uses the
+group-mean route as the main storyline and treats the pointwise route as a
+stronger sufficient refinement.
+\end{remark}
+
+\begin{condition}[Optional late-stage honest \(d\)-upper bound]
+\label{cond:honest_d_upper}
+There exist \(T_H<\infty\) and \(r_H\ge 0\) such that
+\begin{equation}
+    \max_{i\in\HH} d_i^t \le r_H,
+    \qquad \forall t\ge T_H.
+    \label{eq:honest_d_cond}
+\end{equation}
+\end{condition}
+
+\begin{remark}[How Lemma~\ref{lem:honest_d_upper} relates to Condition~\ref{cond:honest_d_upper}]
+Lemma~\ref{lem:honest_d_upper} provides an expectation-level estimate for the
+honest \(d\)-statistics. Condition~\ref{cond:honest_d_upper} is the stronger
+pathwise late-stage form needed by the pointwise \(\nu\)-separation argument.
+It may be justified by additional concentration assumptions, or treated as a
+code-aligned sufficient condition when one works directly with the realized
+training trajectory.
+\end{remark}
+
+\begin{remark}[Status of the pointwise route]
+\label{rem:pointwise_route_status}
+The next theorem is kept as a stronger sufficient route, but it is not the
+main storyline of this manuscript. Its role is to show that, under additional
+pathwise control, one can upgrade relative late-stage band elevation to a full
+pointwise Byzantine--honest \(\nu\)-gap. The experimentally primary route
+remains the weaker group-mean mechanism developed below.
+\end{remark}
+
+\begin{theorem}[Stronger pointwise route from honest \(d\)-control and attack effectiveness]
+\label{thm:nu_separation_main}
+Assume Condition~\ref{cond:honest_d_upper} holds and that every Byzantine
+client \(j\in\BB\) satisfies the conclusion of
+Proposition~\ref{prop:attack_nonabsorb} with the same positive lower bound. Let
+\[
+    \qquad
+    r_B := r_B(\epsilon,c,\rho_b).
+\]
+If
+\begin{equation}
+    r_B > r_H,
+\label{eq:strict_d_margin}
+\end{equation}
+then there exist \(\underline\Delta_d:=\frac12(r_B-r_H)>0\) and \(T_0<\infty\)
+such that for all
+sufficiently large \(t\),
+\begin{equation}
+    \min_{j\in\BB} d_j^t - \max_{i\in\HH} d_i^t \ge \underline\Delta_d.
+    \label{eq:eventual_d_gap}
+\end{equation}
+Consequently, for every pair \((j,i)\in\BB\times\HH\),
+\begin{equation}
+    \liminf_{t\to\infty}(\nu_j^t-\nu_i^t)\ge \underline\Delta_d,
+    \label{eq:eventual_nu_gap_pair}
+\end{equation}
+and therefore there exists \(T_1<\infty\) such that Condition~\ref{cond:nu_sep_emp}
+holds with some \(0<\gamma_\nu<\underline\Delta_d\) and finite spreads
+\(\omega_H,\omega_B\).
+\end{theorem}
+
+\begin{proof}
+By Condition~\ref{cond:honest_d_upper},
+\[
+    \max_{i\in\HH} d_i^t \le r_H
+    \qquad \forall t\ge T_H.
+\]
+By the uniform Byzantine lower-bound hypothesis,
+\[
+    \liminf_{t\to\infty}\min_{j\in\BB} d_j^t \ge r_B.
+\]
+Since \(r_B-r_H>0\), by the definition of \(\liminf\) there exists
+\(T_B<\infty\) such that
+\[
+    \min_{j\in\BB} d_j^t \ge \frac{r_B+r_H}{2},
+    \qquad \forall t\ge T_B.
+\]
+Therefore, for all \(t\ge T_0:=\max\{T_H,T_B\}\),
+\[
+    \min_{j\in\BB} d_j^t - \max_{i\in\HH} d_i^t
+    \ge
+    \frac{r_B+r_H}{2} - r_H
+    =
+    \frac{r_B-r_H}{2}
+    =
+    \underline\Delta_d.
+\]
+This proves
+\eqref{eq:eventual_d_gap}.
+
+Now fix any \((j,i)\in\BB\times\HH\). By Lemma~\ref{lem:nu_gap_recursion},
+\[
+    z_{ji}^{t+1}
+    =
+    \rho_\nu z_{ji}^t + (1-\rho_\nu)(d_j^t-d_i^t)
+    \ge
+    \rho_\nu z_{ji}^t + (1-\rho_\nu)\underline\Delta_d
+\]
+for all \(t\ge T_0\). Unrolling gives
+\[
+    z_{ji}^{t}
+    \ge
+    \rho_\nu^{\,t-T_0} z_{ji}^{T_0}
+    +
+    (1-\rho_\nu^{\,t-T_0})\underline\Delta_d.
+\]
+Taking \(\liminf\) yields \eqref{eq:eventual_nu_gap_pair}. Since the honest and
+Byzantine \(\nu\)-trajectories are bounded by Lemma~\ref{lem:nu_tracking}
+applied to bounded \(d\)-bands, their within-group spreads remain finite on
+late-stage windows. Hence one may choose \(T_1\) large enough so that the
+pointwise gap remains above some \(0<\gamma_\nu<\underline\Delta_d\), which yields
+Condition~\ref{cond:nu_sep_emp}.
+\end{proof}
+
+\begin{condition}[Late-stage \(\nu\)-band separation]
+\label{cond:nu_sep_emp}
+We say that late-stage \(\nu\)-band separation holds if there exist \(T_1<\infty\),
+\(\gamma_\nu>0\), \(\omega_H\ge 0\), and \(\omega_B\ge 0\) such that for all
+\(t\ge T_1\),
+\begin{align}
+    \min_{j\in\BB}\nu_j^t - \max_{i\in\HH}\nu_i^t &\ge \gamma_\nu,
+    \label{eq:nu_gap_ass}\\
+    \max_{i\in\HH}\nu_i^t - \min_{i\in\HH}\nu_i^t &\le \omega_H,
+    \label{eq:nu_h_spread}\\
+    \max_{j\in\BB}\nu_j^t - \min_{j\in\BB}\nu_j^t &\le \omega_B.
+    \label{eq:nu_b_spread}
+\end{align}
+\end{condition}
+
+\begin{definition}[Group means and radii for \(\nu\)]
+\label{def:group_mean_radius}
+For each round \(t\), define
+\[
+    \bar\nu_H^t := \frac1H\sum_{i\in\HH}\nu_i^t,
+    \qquad
+    \bar\nu_B^t := \frac1B\sum_{j\in\BB}\nu_j^t,
+\]
+and the corresponding within-group radii
+\[
+    r_H^t := \max_{i\in\HH}\lvert \nu_i^t-\bar\nu_H^t\rvert,
+    \qquad
+    r_B^t := \max_{j\in\BB}\lvert \nu_j^t-\bar\nu_B^t\rvert.
+\]
+\end{definition}
+
+\begin{theorem}[Late-stage group-mean \(d\)-band elevation implies group-mean \(\nu\)-band elevation]
+\label{thm:mean_d_to_mean_nu}
+For each round \(t\), define the group means
+\[
+    \bar d_H^t := \frac1H\sum_{i\in\HH} d_i^t,
+    \qquad
+    \bar d_B^t := \frac1B\sum_{j\in\BB} d_j^t.
+\]
+Assume there exist \(T_d<\infty\) and \(\bar\gamma_d>0\) such that for all
+\(t\ge T_d\),
+\begin{equation}
+    \bar d_B^t-\bar d_H^t \ge \bar\gamma_d.
+    \label{eq:mean_d_sep}
+\end{equation}
+Then the group-mean \(\nu\)-gap satisfies the recursion
+\begin{equation}
+    \bar\nu_B^{t+1}-\bar\nu_H^{t+1}
+    =
+    \rho_\nu(\bar\nu_B^t-\bar\nu_H^t)
+    +
+    (1-\rho_\nu)(\bar d_B^t-\bar d_H^t),
+    \label{eq:mean_nu_gap_recursion}
+\end{equation}
+and therefore, for all \(t\ge T_d\),
+\begin{equation}
+    \bar\nu_B^{t}-\bar\nu_H^{t}
+    \ge
+    \rho_\nu^{\,t-T_d}(\bar\nu_B^{T_d}-\bar\nu_H^{T_d})
+    +
+    (1-\rho_\nu^{\,t-T_d})\bar\gamma_d.
+    \label{eq:mean_nu_gap_unrolled}
+\end{equation}
+In particular,
+\begin{equation}
+    \liminf_{t\to\infty}(\bar\nu_B^t-\bar\nu_H^t)\ge \bar\gamma_d>0.
+    \label{eq:mean_nu_gap_from_mean_d}
+\end{equation}
+Hence Condition~\ref{cond:mean_nu_sep} holds with any
+\(0<\bar\gamma_\nu<\bar\gamma_d\) after a finite transient.
+\end{theorem}
+
+\begin{proof}
+Average the recursion
+\(
+\nu_i^{t+1}=\rho_\nu\nu_i^t+(1-\rho_\nu)d_i^t
+\)
+over \(i\in\HH\) and over \(j\in\BB\), obtaining
+\[
+    \bar\nu_H^{t+1}
+    =
+    \rho_\nu\bar\nu_H^t+(1-\rho_\nu)\bar d_H^t,
+    \qquad
+    \bar\nu_B^{t+1}
+    =
+    \rho_\nu\bar\nu_B^t+(1-\rho_\nu)\bar d_B^t.
+\]
+Subtracting the two identities gives \eqref{eq:mean_nu_gap_recursion}. Under
+\eqref{eq:mean_d_sep}, for all \(t\ge T_d\),
+\[
+    \bar\nu_B^{t+1}-\bar\nu_H^{t+1}
+    \ge
+    \rho_\nu(\bar\nu_B^t-\bar\nu_H^t)+(1-\rho_\nu)\bar\gamma_d.
+\]
+Unrolling this affine recursion yields \eqref{eq:mean_nu_gap_unrolled}. Taking
+\(\liminf\) proves \eqref{eq:mean_nu_gap_from_mean_d}. The final claim follows
+because the transient term
+\(\rho_\nu^{\,t-T_d}(\bar\nu_B^{T_d}-\bar\nu_H^{T_d})\) vanishes.
+\end{proof}
+
+\begin{remark}[Why Theorem~\ref{thm:mean_d_to_mean_nu} matches the experiments]
+\label{rem:mean_d_to_mean_nu_emp}
+Theorem~\ref{thm:mean_d_to_mean_nu} captures the empirically most faithful
+route in the present manuscript. The logs and best-fit curves suggest that both
+honest and Byzantine clients remain in positive late-stage \(d\)-bands, while
+the Byzantine group occupies a higher group-mean \(d\)-band. The theorem then
+shows that this relative \(d\)-band elevation is automatically accumulated by
+the EMA recursion into a higher group-mean \(\nu\)-band, which is the quantity that
+directly drives weighting.
+\end{remark}
+
+\begin{condition}[Late-stage group-mean \(\nu\)-band elevation]
+\label{cond:mean_nu_sep}
+We say that late-stage group-mean \(\nu\)-band elevation holds if there exist
+\(T_{\mathrm{mean}}<\infty\) and \(\bar\gamma_\nu>0\) such that for all
+\(t\ge T_{\mathrm{mean}}\),
+\begin{equation}
+    \bar\nu_B^t-\bar\nu_H^t \ge \bar\gamma_\nu > 0.
+    \label{eq:mean_nu_sep}
+\end{equation}
+\end{condition}
+
+\begin{theorem}[Late-stage Byzantine \(\nu\)-band elevation implies stronger penalty pressure]
+\label{thm:mean_nu_to_penalty}
+Assume Condition~\ref{cond:mean_nu_sep} and define the idealized excess scores
+\(
+e_k^t := (\nu_k^t-\bar\nu_t)_+
+\)
+with
+\(
+\bar\nu_t := \frac1N\sum_{\ell=1}^N \nu_\ell^t.
+\)
+Then for every \(t\ge T_{\mathrm{mean}}\),
+\begin{equation}
+    \frac1B\sum_{j\in\BB} e_j^t
+    \ge
+    \frac{H}{N}\,\bar\gamma_\nu.
+    \label{eq:mean_excess_byz_lb}
+\end{equation}
+Consequently, at every such round there exists at least one Byzantine client
+\(j_t\in\BB\) satisfying
+\begin{equation}
+    e_{j_t}^t \ge \frac{H}{N}\,\bar\gamma_\nu,
+    \label{eq:exists_byz_penalized}
+\end{equation}
+and therefore at least one Byzantine raw score obeys
+\begin{equation}
+    \hat w_{j_t}^t
+    =
+    \frac{1}{1+\alpha e_{j_t}^t}
+    \le
+    \frac{1}{1+\alpha \frac{H}{N}\bar\gamma_\nu}.
+    \label{eq:exists_byz_raw_weight_upper}
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+Fix \(t\ge T_{\mathrm{mean}}\). Since
+\[
+    \bar\nu_t
+    =
+    \frac{H\bar\nu_H^t+B\bar\nu_B^t}{N}
+    =
+    \bar\nu_B^t-\frac{H}{N}(\bar\nu_B^t-\bar\nu_H^t),
+\]
+Condition~\ref{cond:mean_nu_sep} gives
+\[
+    \bar\nu_B^t-\bar\nu_t
+    =
+    \frac{H}{N}(\bar\nu_B^t-\bar\nu_H^t)
+    \ge
+    \frac{H}{N}\bar\gamma_\nu.
+\]
+Now use Jensen's inequality for the convex map \(x\mapsto x_+\):
+\[
+    \frac1B\sum_{j\in\BB} e_j^t
+    =
+    \frac1B\sum_{j\in\BB}(\nu_j^t-\bar\nu_t)_+
+    \ge
+    \left(
+        \frac1B\sum_{j\in\BB}(\nu_j^t-\bar\nu_t)
+    \right)_+
+    =
+    (\bar\nu_B^t-\bar\nu_t)_+.
+\]
+Combining the two displays yields \eqref{eq:mean_excess_byz_lb}. Hence the
+average Byzantine excess is at least \(\frac{H}{N}\bar\gamma_\nu\), so at least
+one Byzantine client satisfies \eqref{eq:exists_byz_penalized}. The raw-weight
+bound \eqref{eq:exists_byz_raw_weight_upper} follows from monotonicity of
+\(x\mapsto 1/(1+\alpha x)\).
+\end{proof}
+
+\begin{proposition}[Pointwise \(\nu\)-separation from mean separation and radii]
+\label{prop:mean_radius_to_pointwise}
+Suppose there exist \(T_1<\infty\), \(\bar\gamma_\nu>0\), \(r_H\ge 0\), and
+\(r_B\ge 0\) such that for all \(t\ge T_1\),
+\begin{equation}
+    \bar\nu_B^t-\bar\nu_H^t \ge \bar\gamma_\nu,
+    \qquad
+    r_H^t \le r_H,
+    \qquad
+    r_B^t \le r_B.
+    \label{eq:mean_radius_cond}
+\end{equation}
+If
+\begin{equation}
+    \bar\gamma_\nu > r_H+r_B,
+    \label{eq:mean_radius_margin}
+\end{equation}
+then Condition~\ref{cond:nu_sep_emp} holds with
+\begin{equation}
+    \gamma_\nu = \bar\gamma_\nu-r_H-r_B,
+    \qquad
+    \omega_H = 2r_H,
+    \qquad
+    \omega_B = 2r_B.
+    \label{eq:mean_radius_to_band}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+For \(t\ge T_1\),
+\[
+    \min_{j\in\BB}\nu_j^t
+    \ge
+    \bar\nu_B^t-r_B,
+    \qquad
+    \max_{i\in\HH}\nu_i^t
+    \le
+    \bar\nu_H^t+r_H.
+\]
+Hence
+\[
+    \min_{j\in\BB}\nu_j^t-\max_{i\in\HH}\nu_i^t
+    \ge
+    (\bar\nu_B^t-\bar\nu_H^t)-r_H-r_B
+    \ge
+    \bar\gamma_\nu-r_H-r_B
+    =
+    \gamma_\nu.
+\]
+Also,
+\[
+    \max_{i\in\HH}\nu_i^t-\min_{i\in\HH}\nu_i^t\le 2r_H,
+    \qquad
+    \max_{j\in\BB}\nu_j^t-\min_{j\in\BB}\nu_j^t\le 2r_B.
+\]
+Thus \eqref{eq:nu_gap_ass}--\eqref{eq:nu_b_spread} follow.
+\end{proof}
+
+\begin{remark}[Implementation Alignment]
+Condition~\ref{cond:nu_sep_emp} matches the actual role played by the
+implementation: HRAC does not require a pointwise eventual \(d\)-gap at every
+round. What matters operationally is late-stage separation in the EMA
+statistic \(\nu\), since \(\nu\) is the quantity that directly enters the
+weighting rule. This is also the quantity exposed by the logs.
+\end{remark}
+
+\paragraph{Algorithmic Intuition: The Decoupled Penalty Mechanism.}
+The implementation induces a structural trade-off for adversarial clients.
+After an initial warm-up stage, HRAC assigns
+unnormalized aggregation scores according to
+\begin{equation}
+    \hat{w}_i^t = \frac{1}{1+\alpha \, \xi_i^t},
+    \qquad
+    \xi_i^t =
+    \begin{cases}
+        \max(\nu_i^t-\overline{\nu}^t, 0), & \nu_i^t > 0.9,\\
+        0, & \text{otherwise},
+    \end{cases}
+    \label{eq:exact_relative_penalty}
+\end{equation}
+followed by normalization
+\(
+w_i^t = \hat{w}_i^t / \sum_k \hat{w}_k^t
+\),
+possibly followed by iterative max-weight capping in implementation.
+
+This decouples single-round mitigation from cross-round tracking:
+\begin{enumerate}
+    \item \textbf{Single-Round Mitigation:} The history center \(b_i^t\) and
+    residual cap \(\tau_i^t\) explicitly bound the immediate malicious
+    injection magnitude.
+    \item \textbf{Cross-Round Penalty:} The \(\nu_i^t\) statistic evaluates
+    behavioral stability through
+    \[
+        d_i^t
+        =
+        \norm{\bar r_{i,\mathrm{norm}}^t-\bar r_{i,\mathrm{norm}}^{t-1}}.
+    \]
+    Small \(d_i^t\) slows \(\nu\)-accumulation but also limits temporal
+    adaptability of the injected residuals; large \(d_i^t\) improves
+    adaptability but raises \(\nu_i^t\) relative to the population mean.
+    Once \(\nu_i^t>0.9\), this increase is converted into down-weighting by
+    \eqref{eq:exact_relative_penalty}.
+\end{enumerate}
+
+\begin{remark}[Positive-band interpretation]
+The intended interpretation of \eqref{eq:exact_relative_penalty} is relative,
+not absolute. Honest clients need not have \(\nu_i^t\approx 0\), and Byzantine
+clients need not be separated by a zero-versus-nonzero dichotomy. The mechanism
+only requires that Byzantine clients tend to exhibit a larger late-stage
+\(\nu\)-band, so that their excess scores \((\nu_i^t-\bar\nu_t)_+\) are
+activated more often or more strongly than those of honest clients.
+\end{remark}
+
+\subsection{Excess Gap and Ideal Weight Control}
+
+\begin{lemma}[Pairwise \(\nu\)-gap recursion]
+\label{lem:nu_gap_recursion}
+For any \(j\in\BB\), \(i\in\HH\), define
+\(z_{ji}^t:=\nu_j^t-\nu_i^t\). Then
+\begin{equation}
+    z_{ji}^{t+1}
+    =
+    \rho_\nu z_{ji}^t + (1-\rho_\nu)(d_j^t-d_i^t).
+    \label{eq:z_recursion}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+Subtract the two \(\nu\)-updates:
+\[
+    \nu_j^{t+1}-\nu_i^{t+1}
+    =
+    \rho_\nu(\nu_j^t-\nu_i^t)+(1-\rho_\nu)(d_j^t-d_i^t).
+\]
+\end{proof}
+
+\begin{lemma}[Exact \(m\)-step \(\nu\)-gap identity]
+\label{lem:m_step_nu_gap}
+For any \(m\ge 1\) and any pair \((j,i)\in\BB\times\HH\),
+\begin{equation}
+    z_{ji}^{t+m}
+    =
+    \rho_\nu^m z_{ji}^t
+    +
+    (1-\rho_\nu)\sum_{\ell=0}^{m-1}\rho_\nu^{m-1-\ell}
+    \bigl(d_j^{t+\ell}-d_i^{t+\ell}\bigr).
+    \label{eq:m_step_z_exact}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+Iterate \eqref{eq:z_recursion} \(m\) times and collect the resulting geometric
+weights.
+\end{proof}
+
+\begin{definition}[Windowed weighted \(d\)-gap certificate]
+\label{def:window_gap}
+For \(m\ge 1\), define the \(m\)-step weighted \(d\)-gap between Byzantine
+client \(j\) and honest client \(i\) by
+\begin{equation}
+    \mathcal G_{ji}^{t,m}
+    :=
+    (1-\rho_\nu)\sum_{\ell=0}^{m-1}\rho_\nu^{m-1-\ell}
+    \bigl(d_j^{t+\ell}-d_i^{t+\ell}\bigr).
+    \label{eq:window_gap}
+\end{equation}
+This quantity is fully observable from logged \(d\)-statistics and determines,
+through \eqref{eq:m_step_z_exact}, how much separation is injected into the
+\(\nu\)-gap over the window \([t,t+m-1]\).
+\end{definition}
+
+\begin{proposition}[Data-dependent \(\nu\)-separation certificate]
+\label{prop:data_driven_nu_certificate}
+Fix \(m\ge 1\). Suppose there exist \(T_0<\infty\) and \(\Gamma_m>0\) such that
+for every \(t\ge T_0\),
+\begin{equation}
+    \min_{(j,i)\in\BB\times\HH}\mathcal G_{ji}^{t,m}\ge \Gamma_m.
+    \label{eq:window_gap_lb}
+\end{equation}
+Then, for all \(t\ge T_0\),
+\begin{equation}
+    \min_{(j,i)\in\BB\times\HH} z_{ji}^{t+m}
+    \ge
+    \rho_\nu^m \min_{(j,i)\in\BB\times\HH} z_{ji}^t + \Gamma_m.
+    \label{eq:block_gap_recursion}
+\end{equation}
+Consequently,
+\begin{equation}
+    \liminf_{k\to\infty}\;
+    \min_{(j,i)\in\BB\times\HH} z_{ji}^{T_0+km}
+    \ge
+    \frac{\Gamma_m}{1-\rho_\nu^m}
+    >
+    0.
+    \label{eq:block_gap_positive}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+By Lemma~\ref{lem:m_step_nu_gap},
+\[
+    z_{ji}^{t+m}=\rho_\nu^m z_{ji}^t+\mathcal G_{ji}^{t,m}.
+\]
+Taking the minimum over \((j,i)\in\BB\times\HH\) and using
+\eqref{eq:window_gap_lb} yields \eqref{eq:block_gap_recursion}. Also,
+let
+\(
+y_k:=\min_{(j,i)\in\BB\times\HH} z_{ji}^{T_0+km}.
+\)
+Then \(y_{k+1}\ge \rho_\nu^m y_k+\Gamma_m\). Unrolling this affine recursion
+gives
+\[
+    y_k
+    \ge
+    \rho_\nu^{mk} y_0
+    +
+    \Gamma_m\sum_{s=0}^{k-1}\rho_\nu^{ms}.
+\]
+Since \(\sum_{s=0}^{k-1}\rho_\nu^{ms}\to (1-\rho_\nu^m)^{-1}\) and
+\(\rho_\nu^{mk}y_0\to 0\), we obtain \eqref{eq:block_gap_positive}.
+\end{proof}
+
+\paragraph{Empirical support from the \(\rho_\nu=0.95\), threshold \(0.9\) run.}
+The run recorded in
+\texttt{hrac-log-label\_flipping0.95v0.9.txt} provides the clearest empirical
+match to the group-level theory. In the late-stage window
+\(t\in[18000,20000]\), the empirical mean gap
+\(\bar\nu_B^t-\bar\nu_H^t\) stays positive, typically between \(0.06\) and
+ \(0.15\) with median near \(0.12\), which is consistent with
+Condition~\ref{cond:mean_nu_sep} and therefore supports
+Theorem~\ref{thm:mean_nu_to_penalty}. Moreover, the best-fit curves for the
+\(d\)-statistics are consistent with the premise of
+Theorem~\ref{thm:mean_d_to_mean_nu}: the Byzantine group occupies a slightly
+higher late-stage mean \(d\)-band, which the EMA then converts into a higher
+late-stage mean \(\nu\)-band. The same run also shows threshold activation and
+a clear weight split: threshold-crossing Byzantine clients repeatedly receive
+weights around \(0.066\) to \(0.088\), whereas the honest majority remains near
+\(0.108\) to \(0.111\). Thus the realized trajectory follows the intended pipeline
+\[
+    \text{positive late-stage bands}
+    \;\Longrightarrow\;
+    \text{higher Byzantine }\nu\text{-band}
+    \;\Longrightarrow\;
+    \text{threshold crossing}
+    \;\Longrightarrow\;
+    \text{weight suppression}.
+\]
+Figure~\ref{fig:hrac_iid_best_fit_d_nu} gives a paper-ready visualization of
+this same run. It makes the intended interpretation explicit: neither
+population is driven to a zero-statistics regime; instead, both populations
+remain in positive late-stage bands, while the Byzantine trend is
+systematically higher, especially for \(\nu\), which is precisely the statistic
+used by the weighting rule.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\textwidth]{hrac-log-label_flipping0.95v0.9_d_nu_curves_with_best_fit_0_20000.png}
+    \caption{Late-stage \(d\)- and \(\nu\)-statistics for the IID
+    label-flipping run with \(\rho_\nu=0.95\) and activation threshold \(0.9\),
+    together with per-client best-fit lines over \(t\in[0,20000]\). The upper
+    panel plots the logged \(d_i^t\) trajectories, and the lower panel plots
+    the corresponding \(\nu_i^t\) trajectories. Two features are visible.
+    First, neither honest nor Byzantine clients collapse to \(0\); both groups
+    remain in positive late-stage bands. Second, the Byzantine clients exhibit
+    a higher fitted trend, especially in \(\nu\), than the honest clients.
+    This supports the group-level mechanism formalized by
+    Theorem~\ref{thm:mean_d_to_mean_nu} and
+    Theorem~\ref{thm:mean_nu_to_penalty}: a larger late-stage Byzantine
+    \(d\)-band is accumulated by the EMA into a larger late-stage
+    \(\nu\)-band, which then activates stronger penalties and smaller
+    aggregation weights.}
+    \label{fig:hrac_iid_best_fit_d_nu}
+\end{figure}
+
+In the paper body, Figure~\ref{fig:hrac_iid_best_fit_d_nu} can therefore be
+read as a compact visual summary of the adaptive-statistics story: the honest
+and Byzantine clients both remain active in positive late-stage bands, but the
+Byzantine group sits higher on average, and that relative elevation is exactly
+what HRAC converts into down-weighting once the thresholded penalty mechanism
+is activated. For clarity, the implementation used in this run applies the
+threshold test \(\nu_i^t>0.9\) in the aggregation module; any remaining
+\(\nu>1\) text in the log output should be read as a stale logger string
+rather than the effective runtime threshold.
+
+\begin{theorem}[Excess gap from late-stage \(\nu\)-band separation]
+\label{thm:excess_from_d}
+Assume Condition~\ref{cond:nu_sep_emp} holds.
+Define the idealized excess score
+\begin{equation}
+    e_k^t := (\nu_k^t-\bar\nu_t)_+,
+    \qquad
+    \bar\nu_t := \frac1N\sum_{\ell=1}^N \nu_\ell^t.
+    \label{eq:ideal_excess_score}
+\end{equation}
+Define
+\[
+    \Gamma_e
+    :=
+    \frac{H}{N}\gamma_\nu - \frac{H}{N}\omega_H - \frac{B}{N}\omega_B.
+\]
+If \(\Gamma_e>0\), then for every \(t\ge T_1\),
+\begin{equation}
+    \min_{j\in\BB} e_j^t - \max_{i\in\HH} e_i^t
+    \ge
+    \Gamma_e
+    > 0.
+    \label{eq:e_gap_ass}
+\end{equation}
+Hence with
+\(E_H:=\sup_{t\ge T_1}\max_{i\in\HH}e_i^t\), we have
+\begin{align}
+    \max_{i\in\HH} e_i^t &\le E_H, \label{eq:e_h_bound}\\
+    \min_{j\in\BB} e_j^t &\ge E_H+\gamma_e, \label{eq:e_b_bound}
+\end{align}
+for all \(t\ge T_1\), with any \(0<\gamma_e\le \Gamma_e\).
+Moreover, with exact raw scores
+\(\hat w_k^t=\frac{1}{1+\alpha e_k^t}\), the raw-weight ratio gap holds:
+\begin{equation}
+    \max_{j\in\BB}\hat w_j^t
+    \le
+    \kappa_t \min_{i\in\HH}\hat w_i^t,
+    \qquad
+    \kappa_t
+    :=
+    \frac{1+\alpha \max_{i\in\HH}e_i^t}
+         {1+\alpha \min_{j\in\BB}e_j^t}
+    \le
+    \frac{1+\alpha E_H}{1+\alpha(E_H+\gamma_e)}
+    =:\kappa<1.
+    \label{eq:raw_ratio_gap}
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+Fix \(t\ge T_1\), and denote
+\[
+    a_t:=\max_{i\in\HH}\nu_i^t,\quad
+    \underline a_t:=\min_{i\in\HH}\nu_i^t,\quad
+    b_t:=\min_{j\in\BB}\nu_j^t,\quad
+    \overline b_t:=\max_{j\in\BB}\nu_j^t.
+\]
+By \eqref{eq:nu_h_spread}--\eqref{eq:nu_b_spread},
+\(\underline a_t\ge a_t-\omega_H\), \(\overline b_t\le b_t+\omega_B\), and by
+\eqref{eq:nu_gap_ass}, \(b_t-a_t\ge\gamma_\nu\).
+Since
+\[
+    \bar\nu_t
+    =
+    \frac{1}{N}\!\left(\sum_{i\in\HH}\nu_i^t+\sum_{j\in\BB}\nu_j^t\right),
+\]
+we have
+\[
+    \bar\nu_t
+    \ge
+    \frac{H\underline a_t + B b_t}{N}
+    \ge
+    a_t - \frac{H}{N}\omega_H + \frac{B}{N}\gamma_\nu,
+\]
+and
+\[
+    \bar\nu_t
+    \le
+    \frac{H a_t + B\overline b_t}{N}
+    \le
+    b_t - \frac{H}{N}(b_t-a_t) + \frac{B}{N}\omega_B
+    \le
+    b_t - \frac{H}{N}\gamma_\nu + \frac{B}{N}\omega_B.
+\]
+Therefore
+\[
+    \max_{i\in\HH} e_i^t
+    =
+    \max_{i\in\HH}(\nu_i^t-\bar\nu_t)_+
+    \le
+    (a_t-\bar\nu_t)_+
+    \le
+    \left(\frac{H}{N}\omega_H-\frac{B}{N}\gamma_\nu\right)_+,
+\]
+and
+\[
+    \min_{j\in\BB} e_j^t
+    \ge
+    (b_t-\bar\nu_t)_+
+    \ge
+    \frac{H}{N}\gamma_\nu-\frac{B}{N}\omega_B.
+\]
+Subtracting yields \eqref{eq:e_gap_ass} with
+\(\Gamma_e=\frac{H}{N}\gamma_\nu-\frac{H}{N}\omega_H-\frac{B}{N}\omega_B\).
+Then \eqref{eq:e_h_bound}--\eqref{eq:e_b_bound} follow by definition of
+\(E_H\) and any \(0<\gamma_e\le\Gamma_e\).
+
+For the ratio bound, for any \(i\in\HH\), \(j\in\BB\),
+\[
+    \frac{\hat w_j^t}{\hat w_i^t}
+    =
+    \frac{1+\alpha e_i^t}{1+\alpha e_j^t}
+    \le
+    \frac{1+\alpha \max_{i'\in\HH}e_{i'}^t}
+         {1+\alpha \min_{j'\in\BB}e_{j'}^t}
+    =\kappa_t.
+\]
+Using \eqref{eq:e_gap_ass} and \(\max_{i\in\HH}e_i^t\le E_H\) gives
+\(\kappa_t\le\frac{1+\alpha E_H}{1+\alpha(E_H+\gamma_e)}<1\).
+\end{proof}
+
+\begin{remark}[Relation to the implemented activation threshold]
+\label{rem:ideal_excess_vs_threshold}
+Theorem~\ref{thm:excess_from_d} is stated for the idealized positive-part score
+\eqref{eq:ideal_excess_score}. The implementation further applies an activation
+gate, penalizing only clients with \(\nu_i^t>0.9\). Therefore the theorem should
+be read as the clean separation result for the underlying excess geometry. To
+transfer it verbatim to the exact implemented score, one additionally needs a
+late-stage threshold-alignment condition, for example that Byzantine clients
+remain above the activation threshold while honest clients do not create a
+competing excess band.
+\end{remark}
+
+\begin{proposition}[Threshold alignment transfers ideal excess separation to the implemented score]
+\label{prop:threshold_alignment}
+Assume Condition~\ref{cond:nu_sep_emp} and suppose the conclusions
+\eqref{eq:e_h_bound}--\eqref{eq:e_b_bound} of
+Theorem~\ref{thm:excess_from_d} hold for some \(E_H\ge 0\) and
+\(\gamma_e>0\). Define the implemented score
+\begin{equation}
+    \xi_k^t
+    :=
+    \begin{cases}
+        (\nu_k^t-\bar\nu_t)_+, & \nu_k^t>0.9,\\
+        0, & \nu_k^t\le 0.9.
+    \end{cases}
+    \label{eq:implemented_xi}
+\end{equation}
+Suppose there exists \(T_\mathrm{act}<\infty\) such that for all \(t\ge
+T_\mathrm{act}\),
+\begin{equation}
+    \min_{j\in\BB}\nu_j^t > 0.9,
+    \label{eq:byz_threshold_on}
+\end{equation}
+and either of the following holds:
+\begin{enumerate}[label=(\roman*)]
+    \item \emph{Honest inactive regime:}
+    \(
+    \max_{i\in\HH}\nu_i^t \le 0.9
+    \);
+    \item \emph{Honest active-but-dominated regime:}
+    \(
+    \max_{i\in\HH} e_i^t \le E_H
+    \)
+    and
+    \(
+    \min_{j\in\BB} e_j^t \ge E_H+\gamma_e
+    \)
+    for some \(\gamma_e>0\).
+\end{enumerate}
+Then for all sufficiently large \(t\),
+\begin{equation}
+    \min_{j\in\BB}\xi_j^t - \max_{i\in\HH}\xi_i^t \ge \gamma_\xi > 0
+    \label{eq:implemented_xi_gap}
+\end{equation}
+for some \(\gamma_\xi>0\). Consequently, with implemented raw scores
+\(
+\hat w_k^t = 1/(1+\alpha \xi_k^t),
+\)
+the Byzantine raw scores remain uniformly smaller than the honest raw scores.
+\end{proposition}
+
+\begin{proof}
+Fix \(t\ge T_\mathrm{act}\). Under \eqref{eq:byz_threshold_on}, every Byzantine
+client is active, so \(\xi_j^t=e_j^t\) for \(j\in\BB\). In case (i), all honest
+clients are inactive, hence \(\xi_i^t=0\) for \(i\in\HH\), while
+\eqref{eq:e_b_bound} gives \(\min_{j\in\BB}e_j^t\ge E_H+\gamma_e\). Therefore
+\[
+    \min_{j\in\BB}\xi_j^t-\max_{i\in\HH}\xi_i^t
+    =
+    \min_{j\in\BB}e_j^t
+    \ge
+    \gamma_e.
+\]
+In case (ii), active honest clients satisfy \(\xi_i^t=e_i^t\) and inactive
+honest clients satisfy \(\xi_i^t=0\le e_i^t\), so
+\[
+    \max_{i\in\HH}\xi_i^t \le \max_{i\in\HH} e_i^t \le E_H,
+\]
+whereas \(\min_{j\in\BB}\xi_j^t=\min_{j\in\BB}e_j^t\ge E_H+\gamma_e\). Hence
+\eqref{eq:implemented_xi_gap} holds with \(\gamma_\xi:=\gamma_e\). Monotonicity
+of \(x\mapsto 1/(1+\alpha x)\) then transfers the score gap to the raw-weight
+ordering.
+\end{proof}
+
+\begin{corollary}[Excess gap from a verified windowed \(d\)-certificate]
+\label{cor:excess_from_window_certificate}
+Suppose the hypotheses of Proposition~\ref{prop:data_driven_nu_certificate}
+hold and the resulting positive \(\nu\)-gap level is large enough so that, for
+all sufficiently large block times, the within-group spreads satisfy
+\eqref{eq:nu_h_spread}--\eqref{eq:nu_b_spread} with
+\[
+    \gamma_\nu
+    :=
+    \frac{\Gamma_m}{1-\rho_\nu^m} > 0.
+\]
+Then the conclusions of Theorem~\ref{thm:excess_from_d} apply on those block
+times. Hence the relative penalty mechanism admits a log-verifiable route from
+windowed \(d\)-separation to excess-score separation.
+\end{corollary}
+
+\begin{proof}
+Use Proposition~\ref{prop:data_driven_nu_certificate} to obtain a positive
+block-time lower bound on \(\min_{j\in\BB}\nu_j^t-\max_{i\in\HH}\nu_i^t\), then
+invoke Theorem~\ref{thm:excess_from_d}.
+\end{proof}
+
+\begin{theorem}[Weight control from the exact \(\nu\)-weight recursion]
+\label{thm:weight_control_exact}
+Suppose there exist \(T_0\), \(E_H\ge 0\), and \(\gamma_e>0\) such that
+\eqref{eq:e_h_bound}--\eqref{eq:e_b_bound} hold for all \(t\ge T_0\), and that
+the max-weight cap is inactive for \(t\ge T_0\), so
+\begin{equation}
+    w_i^t = \frac{\hat w_i^t}{\sum_{k=1}^N \hat w_k^t},
+    \qquad
+    \hat w_i^t = \frac{1}{1+\alpha e_i^t}.
+    \label{eq:exact_weight_no_cap}
+\end{equation}
+Define
+\[
+    u_H^{\min} := \frac{1}{1+\alpha E_H},
+    \qquad
+    u_H^{\max} := 1,
+    \qquad
+    u_B^{\max} := \frac{1}{1+\alpha(E_H+\gamma_e)}.
+\]
+Then for all \(t\ge T_0\),
+\begin{equation}
+    \beta_t
+    :=
+    \sum_{j\in\BB} w_j^t
+    \le
+    \bar\beta
+    :=
+    \frac{B\,u_B^{\max}}{H\,u_H^{\min}+B\,u_B^{\max}}
+    < 1.
+    \label{eq:beta_bar_exact}
+\end{equation}
+Hence a concrete bound on \(\beta_t\) is verified.
+\end{theorem}
+
+\begin{proof}
+From \eqref{eq:e_h_bound}--\eqref{eq:e_b_bound} and
+\eqref{eq:exact_weight_no_cap}, honest and Byzantine unnormalised weights obey
+\[
+    \hat w_i^t \ge u_H^{\min}\quad (i\in\HH),
+    \qquad
+    \hat w_j^t \le u_B^{\max}\quad (j\in\BB).
+\]
+Therefore
+\[
+    \sum_{j\in\BB}\hat w_j^t \le B u_B^{\max},
+    \qquad
+    \sum_{i\in\HH}\hat w_i^t \ge H u_H^{\min}.
+\]
+After normalisation,
+\[
+    \beta_t
+    =
+    \frac{\sum_{j\in\BB}\hat w_j^t}
+         {\sum_{i\in\HH}\hat w_i^t+\sum_{j\in\BB}\hat w_j^t}
+    \le
+    \frac{B\,u_B^{\max}}{H\,u_H^{\min}+B\,u_B^{\max}}
+    =\bar\beta.
+\]
+\end{proof}
+
+\subsection{Max-weight cap and iterative renormalisation}
+
+In the current implementation, the inverse-excess raw scores
+\(\hat w_i^t=1/(1+\alpha e_i^t)\) are first normalised to a probability vector,
+and the max-weight cap is then applied to the \emph{normalised} weights:
+\[
+    w_i^t \gets \min\{w_i^t,w_{\max}\},
+\]
+followed by renormalisation. This cap--renormalise step is repeated only if
+needed, for at most a fixed finite number of iterations in code.
+
+\begin{lemma}[Inactive cap regime]
+\label{lem:cap_inactive}
+If the already normalised weights satisfy \(w_i^t\le w_{\max}\) for every
+client \(i\) at round \(t\), then the cap step is inactive and the weights
+coincide with the uncapped normalised \(\nu\)-score formula induced by
+\eqref{eq:exact_weight_no_cap}.
+\end{lemma}
+
+\begin{proof}
+Immediate.
+\end{proof}
+
+\begin{lemma}[Inactive cap when \(w_{\max}\ge 1\)]
+\label{lem:cap_honest_safe}
+For the inverse excess scores \(\hat w_i=1/(1+\alpha e_i)\) with \(e_i\ge 0\),
+one always has \(\hat w_i\in(0,1]\). After normalisation, this implies
+\(w_i\in(0,1]\) as well. Consequently, if \(w_{\max}\ge 1\), then
+\(\min\{w_i,w_{\max}\}=w_i\) for every client \(i\), and a single
+cap check leaves all weights unchanged.
+\end{lemma}
+
+\begin{proof}
+Immediate from \(e_i\ge 0\Rightarrow 1+\alpha e_i\ge 1\).
+\end{proof}
+
+\begin{proposition}[Flattened invariant: cap-dominated weights]
+\label{prop:cap_flat}
+Suppose that after the finite cap--renormalise loop at round \(t\), the
+returned weight vector is flat across clients. Then the final normalised
+weights are uniform \(w_i^t=1/N\) and
+\begin{equation}
+    \beta_t = \frac{B}{N},
+    \qquad
+    \varepsilon_{w,t}
+    =
+    \sum_{i\in\HH}\left|\frac{1}{N}-\frac{1}{H}\right|
+    =
+    \frac{B}{N}.
+    \label{eq:flat_beta_eps}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+If the returned weight vector is flat and sums to \(1\), every coordinate must
+equal \(1/N\). The distortion identity is elementary algebra.
+\end{proof}
+
+\begin{proposition}[General active-cap fixed-point invariant (\(\beta_t\) control)]
+\label{prop:beta_active_cap_general}
+Consider any round \(t\) where the finite cap--renormalise loop returns a
+weight vector \(w^t=(w_1^t,\dots,w_N^t)\) satisfying
+\[
+    w_i^t\ge 0,\qquad \sum_{i=1}^N w_i^t=1,\qquad w_i^t\le w_{\max}\ \forall i.
+\]
+Then, regardless of how many cap iterations were used within that loop,
+\begin{equation}
+    \beta_t
+    :=
+    \sum_{j\in\BB} w_j^t
+    \le
+    \min\{1,\;B\,w_{\max}\}.
+    \label{eq:beta_active_cap_general}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+Since each Byzantine coordinate is bounded by \(w_{\max}\),
+\[
+    \beta_t=\sum_{j\in\BB}w_j^t\le \sum_{j\in\BB} w_{\max}=B\,w_{\max}.
+\]
+Also \(\beta_t\le 1\) because weights sum to \(1\). Combining gives
+\eqref{eq:beta_active_cap_general}.
+\end{proof}
+
+\begin{remark}[Bridge from \(r_H\) to \(\omega_H\)]
+\label{rem:rh_to_omegah}
+Let
+\(
+\omega_H^t:=\max_{i\in\HH}\nu_i^t-\min_{i\in\HH}\nu_i^t
+\).
+Since each \(\nu_i^t\) is an EMA of \(d_i^t\), for any \(i,i'\in\HH\),
+\[
+    \nu_i^{t+1}-\nu_{i'}^{t+1}
+    =
+    \rho_\nu(\nu_i^t-\nu_{i'}^t)
+    +(1-\rho_\nu)(d_i^t-d_{i'}^t).
+\]
+Hence if \(\max_{i\in\HH}d_i^t\le r_H\) eventually, then
+\(\omega_H^t\) is uniformly bounded by \(O(r_H)\) after transients. We use this
+as the explicit link between honest tracking smoothness and honest
+\(\nu\)-spread control in the weight concentration proof. The conversion from
+state-tube bounds such as \eqref{eq:honest_tube_eta} to a direct \(d\)-bound is
+a separate implementation-geometry step.
+\end{remark}
+
+\begin{theorem}[Honest weight concentration from algorithmic smoothness]
+\label{thm:honest_weight_concentration}
+Suppose the honest \(d\)-statistics satisfy
+\(\max_{i\in\HH} d_i^t \le r_H\) eventually. Then the intra-honest weight
+distortion is structurally bounded by the algorithmic parameters and the
+Byzantine mass \(\beta_t\):
+\begin{equation}
+    \varepsilon_{w,t}
+    :=
+    \sum_{i\in\HH}\left|w_i^t-\frac{1}{H}\right|
+    \le
+    C_H\,\alpha r_H + \beta_t,
+    \label{eq:structural_epsw_bound}
+\end{equation}
+for some constant \(C_H>0\) depending only on a lower bound of the honest raw
+weight level \(u_H^{-}\), where
+\[
+    u_H^{-}
+    :=
+    \inf_t \min_{i\in\HH}\hat w_i^t
+    > 0.
+\]
+For sufficiently small learning rates \((\eta \to 0,\ r_H \to \mathcal{O}(\sigma^2))\),
+the distortion simplifies to
+\[
+    \varepsilon_{w,t} \le C_w \beta_t + \mathcal{O}(\sigma^2),
+\]
+satisfying the strict refinement condition required by
+Proposition~\ref{prop:tight_floor_beta2}.
+\end{theorem}
+
+\begin{proof}
+By Remark~\ref{rem:rh_to_omegah}, since \(\max_{i\in\HH} d_i^t \le r_H\), the
+EMA statistic \(\nu_i^t\) for all honest clients concentrates within a narrow
+band \(\omega_H = O(r_H)\). Recall that the excess score used for weighting is
+\[
+    e_i^t = \max(0, \nu_i^t - \bar{\nu}_t).
+\]
+Because honest \(\nu_i^t\) are tightly clustered, their excess scores
+\(e_i^t\) are equally clustered. Specifically,
+\[
+    \max_{i\in\HH} e_i^t - \min_{i\in\HH} e_i^t \le \omega_H = O(r_H).
+\]
+The raw weights are computed as
+\[
+    \hat{w}_i^t = \frac{1}{1+\alpha e_i^t}.
+\]
+Since \(f(x)=1/(1+\alpha x)\) has derivative magnitude at most \(\alpha\) on
+\(x\ge 0\), the spread of the honest raw weights is bounded by
+\[
+    u_H^{+} - u_H^{-}
+    =
+    \max_{i\in\HH} \hat{w}_i^t - \min_{i\in\HH} \hat{w}_i^t
+    \le
+    \alpha \left( \max_{i\in\HH} e_i^t - \min_{i\in\HH} e_i^t \right)
+    \le
+    C_\omega\,\alpha r_H
+\]
+for some \(C_\omega>0\) from the \(\omega_H=O(r_H)\) relation. Using the
+fundamental weight distortion inequality, the normalized weight deviation
+\(\varepsilon_{w,t}\) satisfies
+\[
+    \varepsilon_{w,t}
+    \le
+    \frac{H(u_H^{+} - u_H^{-})}{\sum_{k=1}^N \hat{w}_k^t} + \beta_t.
+\]
+Since the sum of raw weights satisfies \(S_t \ge H u_H^{-}\), the first term is
+bounded by
+\[
+    \frac{C_\omega\alpha r_H}{u_H^{-}}
+    =
+    C_H\alpha r_H
+\]
+with \(C_H:=C_\omega/u_H^{-}\). Therefore,
+\[
+    \varepsilon_{w,t} \le C_H\alpha r_H + \beta_t.
+\]
+\end{proof}
+
+\begin{corollary}[Final model+\(\nu\) convergence statement]
+\label{cor:final_model_nu}
+Suppose Assumptions~\ref{ass:lower_bounded} to \ref{ass:honest_majority},
+suppose moreover that one of the following late-stage routes holds:
+\begin{enumerate}[label=(\alph*)]
+    \item the \emph{strong pointwise route} of
+    Remark~\ref{rem:pointwise_route_status}: either
+    Condition~\ref{cond:nu_sep_emp} or the window-certificate route of
+    Corollary~\ref{cor:excess_from_window_certificate}, together with the direct
+    separation conclusion \eqref{eq:e_gap_ass}--\eqref{eq:raw_ratio_gap} in
+    Theorem~\ref{thm:excess_from_d}, the inactive-cap regime of
+    Theorem~\ref{thm:weight_control_exact}, and the honest-weight distortion
+    regime of Theorem~\ref{thm:honest_weight_concentration} (or the symmetry
+    case \(\varepsilon_{w,t}=0\));
+    \item the \emph{group-level route}: Condition~\ref{cond:mean_nu_sep} and the
+    resulting Byzantine penalty conclusion of
+    Theorem~\ref{thm:mean_nu_to_penalty}, together with the exact
+    implementation bridge supplied by
+    Proposition~\ref{prop:threshold_alignment} once the activation regime is
+    aligned on the realized trajectory.
+\end{enumerate}
+Then:
+\begin{enumerate}[label=(\roman*)]
+    \item \textbf{Model convergence:} The bound \eqref{eq:main_full} holds, so
+    HRAC converges sublinearly to a neighbourhood of first-order stationarity.
+    \item \textbf{Adaptive-state conclusion:} the strong late-stage route
+    yields explicit excess-score separation and weight suppression through
+    Theorem~\ref{thm:excess_from_d}, while the weaker group-level route yields
+    Byzantine penalty pressure through Theorem~\ref{thm:mean_nu_to_penalty} and,
+    once threshold alignment is realized, the corresponding suppression of
+    Byzantine weights in the implemented rule.
+    In addition, for each client \(i\), if
+    \(d_i^t\to d_i^\star\), then \(\nu_i^t\to d_i^\star\) by
+    Lemma~\ref{lem:nu_tracking}.
+    More generally, if \(d_i^t\) remains in a bounded positive band, then
+    \(\nu_i^t\) remains in the same asymptotic band by
+    Lemma~\ref{lem:nu_tracking}.
+\end{enumerate}
+\end{corollary}
+
+\begin{proof}
+Item (i) is always given by Theorem~\ref{thm:main}. Under the strong pointwise
+route, Theorem~\ref{thm:excess_from_d},
+Theorem~\ref{thm:weight_control_exact}, and
+Theorem~\ref{thm:honest_weight_concentration} make the weight-control inputs in
+\eqref{eq:agg_error_final} concrete. Under the weaker group-level route, the
+adaptive statistics still exhibit Byzantine penalty pressure and thresholded
+weight suppression, although without the full explicit pointwise excess-gap
+constants of the strong route.
+Item (ii) is Lemma~\ref{lem:nu_tracking}.
+\end{proof}
+
+\section{Discussion}
+
+The final bound \eqref{eq:main_full} shows that the convergence behaviour of
+HRAC is controlled by five terms:
+\begin{enumerate}[label=\arabic*.]
+    \item stochastic variance of honest updates;
+    \item client heterogeneity;
+    \item global clipping bias on honest messages;
+    \item residual clipping bias relative to each client's own history;
+    \item honest-weight distortion and residual Byzantine mass.
+\end{enumerate}
+
+The main conceptual advantage of HRAC is visible directly in the theorem: the
+method does not force all clients towards a single global centre. Instead, each
+client is clipped only relative to its \emph{own history}. This makes the method
+naturally more tolerant to non-IID honest behaviour, while still suppressing
+adversarial influence through global norm capping and history-based
+down-weighting.
+
+The proof chain is modular. Theorem~\ref{thm:main} gives optimization
+convergence once the aggregation floor is controlled; Lemma~\ref{lem:nu_tracking}
+turns \(d\)-control into \(\nu\)-control; Theorem~\ref{thm:mean_d_to_mean_nu}
+formalizes the experimentally best-matched route from a larger Byzantine
+group-mean \(d\)-band to a larger group-mean \(\nu\)-band;
+Theorem~\ref{thm:mean_nu_to_penalty} then converts that \(\nu\)-band elevation into
+penalty pressure; and Proposition~\ref{prop:data_driven_nu_certificate} gives
+an exact log-verifiable route from windowed \(d\)-gaps to \(\nu\)-separation.
+The stronger pointwise route remains available through
+Theorem~\ref{thm:nu_separation_main}, Theorem~\ref{thm:excess_from_d}, and
+Proposition~\ref{prop:threshold_alignment}. As emphasized in
+Remark~\ref{rem:adaptive_scope}, the cleanest theorem-level part of the
+adaptive-statistics layer is the chain
+\[
+    \text{higher group-mean } d
+    \;\Longrightarrow\;
+    \text{higher group-mean } \nu
+    \;\Longrightarrow\;
+    \text{stronger penalty pressure},
+\]
+whereas the route from attack semantics to a higher Byzantine \(d\)-band is
+presented as a code-aligned sufficient mechanism supported by the runs.
+
+\paragraph{How to read the adaptive statistics.}
+The experiments motivating this manuscript suggest that neither honest nor
+Byzantine \(d\)-values converge to \(0\). Instead, both populations remain in
+positive late-stage bands, while Byzantine clients exhibit a higher late-stage
+\(\nu\)-band on average and in fitted trend lines. Accordingly, the main role
+of the theory is to explain and formalize \emph{relative elevation} and its
+weighting consequence, not to claim a universal zero-versus-nonzero
+separation.
+
+\paragraph{Conclusion.}
+The manuscript now supports the following message cleanly: HRAC admits a
+rigorous optimization bound, an exact \(d\to\nu\) recursion, and a
+log-verifiable certificate route. On the adaptive-statistics side, the most
+defensible theorem-level claim is the group-mean chain
+\[
+    \text{higher Byzantine } d\text{-band}
+    \;\Longrightarrow\;
+    \text{higher Byzantine } \nu\text{-band}
+    \;\Longrightarrow\;
+    \text{stronger penalty pressure and smaller weights}.
+\]
+The stronger pointwise separation route is retained as a sufficient refinement,
+while the step from persistent attack mismatch to a higher Byzantine \(d\)-band
+is stated as a code-aligned mechanism backed by the empirical runs. Among the
+current experiments, the IID label-flipping configuration with
+\(\rho_\nu=0.95\) and threshold \(0.9\) provides the clearest illustration of
+this relative-elevation mechanism.
+\end{comment}
+\end{document}

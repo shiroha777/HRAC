@@ -1,0 +1,45 @@
+\doublespacing % Do not change - required
+
+\chapter{Project Plan}
+\label{chPlan}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% IMPORTANT
+\begin{spacing}{1} %THESE FOUR
+\minitoc % LINES MUST APPEAR IN
+\end{spacing} % EVERY
+\thesisspacing % CHAPTER
+% COPY THEM IN ANY NEW CHAPTER
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Overview}
+
+The project develops and evaluates robust aggregation methods for federated learning under the Byzantine threat model, with a focus on non-IID client heterogeneity and history-aware attacks. Work is organised into a small number of work packages (WPs) with clear deliverables and review points.
+
+\section{Work Packages}
+
+\begin{itemize}
+    \item \textbf{WP1: Background and Specification (Weeks 1--2).}
+    Review robust aggregation and history-aware attacks; define threat model, datasets, baselines, and success criteria. 
+    \textit{Deliverables:} project specification, literature summary, experimental protocol.
+
+    \item \textbf{WP2: Implementation of Defences (Weeks 2--5).}
+    Implement HSM-Adaptive in the federated training pipeline, including logging/diagnostics and modular support for baselines.
+    \textit{Deliverables:} working codebase, unit/sanity checks, reproducible configs.
+
+    \item \textbf{WP3: Attack Models and Benchmarks (Weeks 4--6).}
+    Implement and validate attack models (e.g., label flipping, scaling, MSA/shuffle, history-aware variants) under IID and non-IID partitions.
+    \textit{Deliverables:} verified attack suite, benchmark scripts, plotting utilities.
+
+    \item \textbf{WP4: Experimental Evaluation (Weeks 6--9).}
+    Run controlled experiments, tune parameters conservatively, and conduct ablations to assess component contributions.
+    \textit{Deliverables:} result tables/figures, ablation findings, robustness--utility analysis.
+
+    \item \textbf{WP5: Dissertation Writing and Refinement (Weeks 8--11).}
+    Write chapters (method, implementation, experiments, results), incorporate supervisor feedback, and finalise presentation quality.
+    \textit{Deliverables:} complete draft, revised final submission, reproducibility appendix.
+\end{itemize}
+
+\section{Milestones and Risk Management}
+
+Key milestones are (i) a complete baseline+attack pipeline, (ii) a stable HSM-Adaptive implementation with diagnostics, and (iii) a complete evaluation set with ablations. Primary risks include unstable training under strong attacks, sensitivity to hyper-parameters, and time overruns due to repeated experiments. Mitigations include fixed seeds, staged experiments (small-scale first), incremental logging, and prioritising a minimal set of decisive comparisons before optional extensions.

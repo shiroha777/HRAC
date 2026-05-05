@@ -1,0 +1,137 @@
+\documentclass[12pt]{report}
+\usepackage{setspace}
+\usepackage{minitoc}
+\usepackage{amsmath,amssymb}
+\newcommand{\thesisspacing}{\doublespacing}
+\dominitoc
+
+\begin{document}
+
+\doublespacing % Do not change - required
+
+\chapter{Implementation Details}
+\label{ch1}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% IMPORTANT
+\begin{spacing}{1} %THESE FOUR
+\minitoc % LINES MUST APPEAR IN
+\end{spacing} % EVERY
+\thesisspacing % CHAPTER
+% COPY THEM IN ANY NEW CHAPTER
+
+\section{Overview}
+
+This chapter describes the implementation of HRAC (History-Residual Adaptive Clipping). HRAC is designed to improve Byzantine robustness while preserving model utility in non-IID federated settings.
+
+\section{Core Design}
+
+HRAC consists of two core mechanisms:
+\begin{enumerate}
+    \item \textbf{Global Norm Clipping}
+    \item \textbf{$\nu$-based Soft Downweighting}
+\end{enumerate}
+
+\section{Pipeline}
+
+At round $t$, with client updates $\{\Delta_i\}_{i=1}^{N}$:
+\begin{enumerate}
+    \item Compute per-client norms and their median.
+    \item Apply global clipping to obtain $\Delta_i^{\mathrm{clip}}$.
+    \item Build residuals using client history and construct $\tilde{\Delta}_i$.
+    \item After warm-up, compute normalized $\nu$-based weights $w_i$.
+    \item Aggregate: $g_t=\sum_i w_i\tilde{\Delta}_i$.
+    \item Update client history states.
+\end{enumerate}
+
+\section{Global Norm Clipping}
+
+\begin{equation}
+\mathrm{med}_t = \mathrm{median}\left(\{\|\Delta_i\|\}_{i=1}^{N}\right), \qquad
+B_t = c_g \cdot \mathrm{med}_t.
+\end{equation}
+
+\begin{equation}
+s_i^{\mathrm{global}}=\min\left(1,\frac{B_t}{\|\Delta_i\|+\epsilon}\right), \qquad
+\Delta_i^{\mathrm{clip}}=s_i^{\mathrm{global}}\Delta_i.
+\end{equation}
+
+\section{History-Residual Modeling}
+
+\begin{equation}
+r_i=\Delta_i^{\mathrm{clip}}-b_i, \qquad \tau_i=c\cdot\mu_i+\epsilon.
+\end{equation}
+
+In the current HRAC run, per-client residual clipping is always enabled:
+\begin{equation}
+\bar{r}_i=\mathrm{clip\_by\_norm}(r_i,\tau_i),
+\end{equation}
+and the candidate update is
+\begin{equation}
+\tilde{\Delta}_i=b_i+\bar{r}_i.
+\end{equation}
+
+Following the current experiment configuration (\texttt{main CMomentum.py}), no extra post-reconstruction cap is applied to $\tilde{\Delta}_i$.
+
+\subsection*{How $b_i$ is obtained}
+
+The history mean $b_i$ is initialized and updated as follows.
+
+For a new client $i$ (first appearance in training),
+\begin{equation}
+b_i \leftarrow \Delta_i^{\mathrm{clip}}.
+\end{equation}
+
+For subsequent rounds, after aggregation-path processing, $b_i$ is updated by EMA:
+\begin{equation}
+\Delta_i^{\mathrm{safe}}=\tilde{\Delta}_i\cdot
+\min\left(1,\frac{B_t}{\|\tilde{\Delta}_i\|+\epsilon}\right),
+\end{equation}
+\begin{equation}
+b_i \leftarrow \rho_b\, b_i + (1-\rho_b)\,\Delta_i^{\mathrm{safe}}.
+\end{equation}
+
+Therefore, $b_i$ is not a fixed baseline; it is a client-specific moving center that tracks stable update behavior over rounds.
+
+\section{$\nu$ Statistics and Downweighting}
+
+\begin{equation}
+d_i=\left\|\bar{r}_i^{\mathrm{norm}}-r_{i,\mathrm{prev}}\right\|, \qquad
+\nu_i \leftarrow \rho_\nu \nu_i + (1-\rho_\nu)d_i.
+\end{equation}
+
+After warm-up:
+\begin{equation}
+e_i=
+\begin{cases}
+\max(\nu_i-\bar{\nu},0), & \nu_i>1,\\
+0, & \nu_i \le 1,
+\end{cases}
+\end{equation}
+\begin{equation}
+\hat{w}_i=\frac{1}{1+\alpha e_i}, \qquad
+w_i=\frac{\hat{w}_i}{\sum_j \hat{w}_j+\epsilon}.
+\end{equation}
+
+The per-client cap \texttt{nu\_weight\_max} is enforced by clipping and renormalization.
+
+\section{Aggregation and State Updates}
+
+\begin{equation}
+g_t=\sum_{i=1}^{N}w_i\tilde{\Delta}_i.
+\end{equation}
+
+Main maintained states are \texttt{b[cid]}, \texttt{b\_norm[cid]}, \texttt{mu[cid]}, \texttt{nu[cid]}, \texttt{r\_prev[cid]}, and \texttt{median\_norm\_prev}.
+
+\section{Complexity}
+
+With $n$ clients and model dimension $d$:
+\begin{equation}
+\text{Time}=\mathcal{O}(nd), \qquad \text{Memory}=\mathcal{O}(nd).
+\end{equation}
+
+\section{Summary}
+
+HRAC combines global norm clipping, history-residual modeling, and $\nu$-based soft downweighting in a unified aggregation pipeline for robust non-IID federated learning.
+
+\end{document}

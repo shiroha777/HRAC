@@ -15,18 +15,22 @@ from ByrdLab.tasks import Task
 
 
 class CNNModel(torch.nn.Module):
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes=10, in_channels=1):
         super(CNNModel, self).__init__()
-        self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
+        self.conv1 = nn.Conv2d(in_channels, 16, 3, padding=1)
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
-        self.fc1 = nn.Linear(32 * 8 * 8, 128)  # CIFAR-10图片的尺寸为32x32，经过两次池化后为8x8
+        # Use adaptive average pooling to handle different input sizes
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((7, 7))
+        self.fc1 = nn.Linear(32 * 7 * 7, 128)
         self.fc2 = nn.Linear(128, num_classes)
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 32 * 8 * 8)  # 将张量展平
+        # Use adaptive pooling to ensure consistent size
+        x = self.adaptive_pool(x)
+        x = x.view(x.size(0), -1)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         # x = F.log_softmax(x, dim=1)
@@ -135,7 +139,10 @@ class NeuralNetworkTask(Task):
     def __init__(self, data_package: DataPackage, batch_size=32):
         weight_decay = 0.0085
         # model = VGG('VGG11', data_package.num_classes)
-        model = CNNModel(data_package.num_classes)
+        # Determine input channels based on dataset
+        # MNIST has 1 channel, CIFAR-10 has 3 channels
+        in_channels = 1 if 'mnist' in data_package.name.lower() else 3
+        model = CNNModel(data_package.num_classes, in_channels=in_channels)
         # model = MLP(data_package.num_classes)
 
         # from torchvision.models import resnet18

@@ -16,7 +16,13 @@ parser.add_argument('--without-record', action='store_true',
                     help='If specifed, no file of running record and log will be left')
 parser.add_argument('--step-agg', type=int, default=1)
 parser.add_argument('--gpu', type=int, default=0)
+parser.add_argument('--cpu', action='store_true',
+                    help='Use CPU instead of GPU to lower GPU utilization')
+parser.add_argument('--batch-size', type=int, default=32,
+                    help='Training batch size (smaller = less GPU memory and load, default 32)')
 parser.add_argument('--prob', type=float, default=1.0)
 
-args = parser.parse_args()
+# parse_known_args() so that when ByrdLab is imported from other scripts (e.g. byzantine-robust-optimizer),
+# unknown flags like --use-cuda, --agg, --momentum do not cause errors
+args, _ = parser.parse_known_args()
 gpu = args.gpu

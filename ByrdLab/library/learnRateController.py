@@ -14,6 +14,22 @@ class constant_lr(learningRateController):
         super().__init__(name='constLR')
     def get_lr(self, iteration):
         return self.init_lr
+
+
+class twoStage_lr(learningRateController):
+    """
+    Two-stage piecewise learning rate:
+      - for iteration < switch_iteration: lr1
+      - for iteration >= switch_iteration: lr2
+    """
+    def __init__(self, switch_iteration: int, lr1: float, lr2: float):
+        super().__init__(name='twoStageLR')
+        self.switch_iteration = int(switch_iteration)
+        self.lr1 = float(lr1)
+        self.lr2 = float(lr2)
+
+    def get_lr(self, iteration):
+        return self.lr1 if iteration < self.switch_iteration else self.lr2
     
 class one_over_sqrt_k_lr(learningRateController):
     '''

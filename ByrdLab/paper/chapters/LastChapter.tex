@@ -1,0 +1,74 @@
+\doublespacing % Do not change - required
+
+\chapter{Reflections}
+\label{chLast}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% IMPORTANT
+\begin{spacing}{1}
+\minitoc
+\end{spacing}
+\thesisspacing
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{bodytwocol}
+
+\section{Project Plan}
+
+The project was organised into work packages (WPs) that mirror both the required dissertation structure and the technical workflow of building, analysing, and validating a robust federated learning defence. Each WP specifies a concrete objective, deliverables, and acceptance criteria. Early effort was intentionally concentrated on establishing a reliable experimental pipeline (datasets, training loop, attack baselines, and logging/plotting), ensuring that later conclusions would not be limited by tooling or reproducibility issues.
+
+Progress was managed through weekly milestones that were defined in terms of measurable outcomes rather than purely time-based targets. Core milestones included: (i) reproducing a stable FedAvg baseline under benign training, (ii) implementing and validating each attack setting, (iii) integrating HRAC into the training loop with consistent configuration management, and (iv) generating diagnostic artefacts such as $\tau/\mu/\nu$ traces, aggregation weights, and attacker-aware bottom-weight summaries. When outcomes deviated from expectations, the plan was revised by updating estimates and re-prioritising tasks, particularly during phases where debugging and experimental variance dominated progress.
+
+Risk management focused on three primary uncertainties: training instability under non-IID partitions, sensitivity of robust aggregation to hyperparameters, and limited turnaround time for supervisor feedback. Mitigations were built into the plan via staged evaluation (IID before non-IID), bounded hyperparameter exploration with fixed seeds, and early production of intermediate results suitable for review. A contingency path was also defined: if the proposed method did not consistently outperform strong baselines, the project would still deliver a defensible contribution through ablation studies and failure-mode analysis, supported by controlled comparisons and clear diagnostics. After the Interim Report milestone, emphasis shifts from implementation completeness to evidence quality, with priority on broader evaluation coverage, targeted ablations to justify individual components, and tightening reproducibility and presentation for the final dissertation.
+
+\section{Evaluation Plan}
+
+The evaluation was structured to produce defensible evidence along three axes: benign utility, robustness under Byzantine behaviour, and the interpretability of HRAC's internal residual and weighting signals. The core questions guiding the evaluation are whether the method (i) preserves standard learning performance when all clients are benign, (ii) mitigates malicious participation without relying on oracle knowledge (e.g., attacker identities or exact attacker fraction), and (iii) yields diagnostics that meaningfully correlate with abnormal client behaviour.
+
+The experimental design spans multiple conditions to reflect realistic variation. Results are reported across IID and non-IID data partitions, multiple attacker fractions, and a set of attack types that includes both conspicuous manipulations (e.g., norm scaling, label flipping) and more stealthy or variance-bounded strategies. All methods are evaluated under matched training settings. Comparisons include standard averaging and representative robust aggregators to quantify robustness--utility trade-offs under identical pipelines.
+
+Success is measured using both learning outcomes and robustness/diagnostic indicators. Primary learning metrics include training stability and final test accuracy. Robustness is evaluated through performance degradation under attack and training stability. Diagnostic interpretability is captured via per-round statistics such as residual thresholds, $\mu/\nu$ histories, normalised weight distributions, and attacker-aware bottom-weight summaries computed in controlled settings by comparing the lowest-weight clients to known attackers.
+
+Component-level justification is provided through ablation studies that remove or disable individual HRAC mechanisms (e.g., global norm clipping, per-client residual clipping, post-residual capping, $\nu$-based weighting, and history smoothing) while keeping all other settings fixed. These ablations are used to expose failure modes, including excessive suppression of benign non-IID clients or insufficient suppression of stealthy adversaries. Where sensitivity is observed, additional runs with different random seeds are used to confirm whether trends are consistent. Reproducibility is supported by fixed seeds, logged configurations, and standardised plots/tables across all methods, with the experiment set iteratively refined to remain minimal while still separating competing explanations for observed behaviour.
+
+\section{Legal and Ethical Matters}
+
+This project investigates robustness in federated/distributed learning under the Byzantine threat model. The work is conducted as a research and engineering study using established open-source software and publicly available benchmark datasets for academic evaluation. It does not involve deployment in a live operational environment or the collection of new personal data.
+
+\textbf{Legal considerations.}
+The implementation relies on third-party libraries and datasets distributed under open licences. Their licence terms and attribution requirements are respected through appropriate citation and acknowledgement in the dissertation and accompanying codebase. From a data protection perspective, experiments are performed on standard public datasets rather than personal or sensitive user records. The project nevertheless recognises that, in real-world federated learning deployments, model updates may carry information that could be considered sensitive. Any future deployment would therefore require suitable governance and technical controls (e.g., access control, secure aggregation, and procedures consistent with applicable data protection regulation such as GDPR).
+
+\smallskip
+
+\textbf{Ethical considerations.}
+The project includes adversarial behaviours to evaluate robustness systematically; the intent is defensive and scientific rather than enabling misuse. Ethical risks are mitigated by focusing on aggregate results and interpretable diagnostic statistics, and by avoiding unnecessary dissemination of operational misuse guidance. The work also considers the ethical risk of unfairly penalising benign clients under non-IID data heterogeneity. To reduce such harm, HRAC compares clients mainly with their own histories and applies continuous suppression rather than rigid exclusion.
+
+\section{Impact}
+
+The main environmental impact of this project comes from compute used for repeated training runs (attacks, baselines, and ablations). This is limited by keeping experiments tightly scoped, reusing standard benchmarks, and logging results carefully to avoid unnecessary reruns. The defence itself is lightweight on the server side because it uses vector norm operations and per-client EMA states, so it does not add substantial overhead per round.
+
+Societally, more robust federated learning can make privacy-preserving systems more reliable in areas such as edge sensing, healthcare, and industrial monitoring. The main risks are increased compute in large deployments and the possibility that benign but highly non-IID clients are down-weighted over time. These are reduced by using client-specific histories, soft weighting rather than hard exclusion, and participation diagnostics to catch unwanted behaviour early.
+
+\section{EDI}
+
+Equality, Diversity, and Inclusion considerations are reflected in the project's emphasis on heterogeneous client behaviour. Non-IID data is treated as a first-class condition, which in real deployments may correspond to diversity in users, devices, environments, and usage patterns. Robust aggregation methods can unintentionally disadvantage minority or atypical yet benign clients if they rely on tight clustering assumptions. HRAC mitigates this risk by using each client's historical residual behaviour as the main reference, aiming to remain tolerant to legitimate variability while still resisting adversarial manipulation.
+
+In addition, the project maintains interpretable diagnostics (per-client residual statistics and weighting statistics) to support auditing and to identify systematic patterns of misclassification that could disproportionately affect particular client populations. These practices contribute to a more transparent and accountable engineering process for systems intended to operate across diverse participants.
+
+\section{Quality Management}
+
+Quality was maintained using standard software and experimental practice. All code and configurations were tracked with version control to support traceability and reproducibility. Experiments were run with consistent settings (including fixed random seeds where appropriate) and key metrics were logged in a structured way (e.g., accuracy, $\tau/\mu/\nu$ statistics, aggregation weights, and attacker-aware diagnostics).
+
+Basic validation checks were built into the pipeline, including numerical stability safeguards and sanity checks on intermediate values (such as weight non-negativity and normalisation). We also ran benign-condition regression tests to ensure the defence does not degrade normal training, and used baseline comparisons and ablations to verify the effect of each component.
+
+\section{Safety Plan}
+
+This project is a software-only study on public benchmark datasets and does not involve laboratory
+equipment, hardware prototyping, human participants, or hazardous materials. Therefore, there are no
+significant physical safety risks.
+
+The main remaining risks are minimal and relate to good computing practice: ensuring code and results are
+stored securely, avoiding any sensitive or personally identifiable data in datasets/logs, and documenting
+the experimental setup to prevent misuse or misinterpretation of results. Any future deployment in
+safety-critical domains would require a separate, domain-specific safety assessment.
+\end{bodytwocol}

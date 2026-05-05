@@ -3,6 +3,32 @@ from sklearn.metrics import confusion_matrix
 from ByrdLab import TARGET_TYPE, DEVICE
 
 @torch.no_grad()
+def binary_classification_accuracy(predictions, targets):
+    '''
+    Calculate binary classification accuracy.
+    predictions: sigmoid output (values between 0 and 1), shape: (batch_size,)
+    targets: binary labels (0 or 1), shape: (batch_size,)
+    Returns: number of correct predictions as a tensor (to be accumulated and divided by total samples)
+    '''
+    # Convert predictions to binary (0 or 1) using threshold 0.5
+    predictions_binary = (predictions > 0.5).type_as(targets)
+    # Return number of correct predictions as tensor
+    return (predictions_binary == targets).sum()
+
+@torch.no_grad()
+def multi_classification_accuracy(predictions, targets):
+    '''
+    Calculate multi-class classification accuracy.
+    predictions: model output logits (before softmax), shape: (batch_size, num_classes)
+    targets: class labels, shape: (batch_size,)
+    Returns: number of correct predictions as a tensor (to be accumulated and divided by total samples)
+    '''
+    # Get predicted class indices (argmax)
+    _, prediction_cls = torch.max(predictions.detach(), dim=1)
+    # Return number of correct predictions as tensor
+    return (prediction_cls == targets).sum()
+
+@torch.no_grad()
 def consensus_error(local_models, honest_nodes):
     return torch.var(local_models[honest_nodes], 
                      dim=0, unbiased=False).norm().item()

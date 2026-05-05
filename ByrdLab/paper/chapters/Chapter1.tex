@@ -1,0 +1,34 @@
+\doublespacing % Do not change - required
+
+\chapter{Introduction}
+\label{ch1}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% IMPORTANT
+\begin{spacing}{1}
+\minitoc
+\end{spacing}
+\thesisspacing
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{bodytwocol}
+
+\section{Motivation}
+Machine learning systems are increasingly deployed across networks of devices that observe, decide, and interact with the physical world. In many deployments, training data is inherently distributed across mobile devices, embedded sensors, and edge gateways, and cannot be conveniently centralised due to privacy constraints, regulatory requirements, bandwidth limitations, or operational risk. Federated learning addresses this setting by enabling clients to compute model updates on local data and communicate only updates to a coordinating server.
+
+However, decentralisation enlarges the threat surface. Standard aggregation rules, such as averaging, assume that received updates are broadly informative and aligned with the global learning objective. In realistic systems this assumption can be violated by device faults, software bugs, unreliable networks, or adversarial clients. Under such conditions, a small number of abnormal updates may dominate the aggregate, destabilise training, or steer the model towards unintended behaviour. Robust aggregation is therefore essential for trustworthy distributed learning.
+
+Robustness is further complicated by client heterogeneity. Under non-identically distributed (non-IID) data, benign clients may legitimately differ in update direction and magnitude, and classical Byzantine-robust rules that rely on tight clustering can over-suppress these benign but diverse contributions. Finally, temporal dynamics introduce additional vulnerabilities: server-side momentum and other history-based mechanisms improve optimisation, but can be exploited by stealthy adversaries that apply small perturbations over many rounds, gradually biasing server state and inducing long-term drift. These challenges motivate history-aware and non-IID-tolerant aggregation methods that suppress malicious behaviour without relying on rigid thresholds or oracle knowledge of the attacker fraction.
+
+\section{Project Aims and Specification}
+This project investigates robustness in federated learning under the Byzantine threat model, where a subset of clients may transmit arbitrary or adversarial updates. The aim is to design, implement, and evaluate a server-side aggregation mechanism that remains effective under both IID and non-IID data and is resilient to both overt and stealthy (history-aware) attacks. The technical objectives are:
+
+    \textbf{Design:} develop an oracle-free, history-residual robust aggregation strategy that clips each client relative to its own historical behaviour and uses \emph{soft} (continuous) weights when residual-change statistics become elevated.
+    
+    \textbf{Implementation:} integrate the proposed aggregator into a federated learning pipeline with modular support for interchangeable baselines, multiple attack models, and comprehensive logging/diagnostics.
+    
+    \textbf{Evaluation:} assess learning utility and final accuracy under benign training, robustness under adversarial participation, and interpretability via diagnostics such as residual thresholds, $\mu/\nu$ trajectories, client weights, and attacker-aware bottom-weight summaries in controlled experiments.
+    
+
+The primary deliverables are (i) a reproducible experimental framework, (ii) the implementation of the proposed HRAC aggregator and baseline methods, and (iii) an empirical study analysing robustness--performance trade-offs and failure modes across IID/non-IID settings and representative attacks.
+\end{bodytwocol}
