@@ -1201,11 +1201,14 @@ class C_HRAC(CentraliedAggregation):
     """
     def __init__(self, honest_nodes, byzantine_nodes,
                  rho_b=0.98, rho_mu=0.95, rho_nu=0.95,
+                 rho_g=0.95, global_scale_floor=1e-3,
                  c=2.5, c_g=3.0,
                  enable_logging=True, log_interval=100, eps=1e-12, log_file=None,
                  nu_penalty_start_iter=50, nu_penalty_alpha=5.0,
                  verbose_nu_log_interval=50,
+                 enable_global_cap=True,
                  enable_per_client_residual_clip=True,
+                 enable_nu_weighting=True,
                  enable_post_residual_b_cap=True,
                  enable_invariant_checks=False,
                  invariant_check_mode="log_and_raise",
@@ -1217,9 +1220,13 @@ class C_HRAC(CentraliedAggregation):
         self.rho_b = rho_b
         self.rho_mu = rho_mu
         self.rho_nu = rho_nu  # ν EMA: ν <- ρν + (1-ρ)·d
+        self.rho_g = rho_g    # Global median-scale EMA: s <- ρg s + (1-ρg)·median_norm
         self.c = c          # Per-client residual clip multiplier
-        self.c_g = c_g      # Global median norm cap multiplier (for MSA defense)
+        self.c_g = c_g      # Predictable global EMA-median cap multiplier
+        self.global_scale_floor = global_scale_floor
+        self.enable_global_cap = enable_global_cap
         self.enable_per_client_residual_clip = enable_per_client_residual_clip  # False: r_bar=r, skip _clip_by_norm
+        self.enable_nu_weighting = enable_nu_weighting
         self.enable_post_residual_b_cap = enable_post_residual_b_cap  # False: no min(1,B/‖Δ̃‖) after b+r̄
         self.eps = eps
         
@@ -1250,6 +1257,9 @@ class C_HRAC(CentraliedAggregation):
         self.mu_min = 1e-3    # Minimum for mu/nu to prevent collapse
         self.nu_min = 1e-3
         self.median_norm_prev = None  # Previous median norm for ratio logging
+        self.global_scale_ema = None  # Predictable global clipping scale used before current-round update
+        self._last_global_scale_for_cap = None
+        self._last_global_scale_next = None
         
         self.iteration_count = -1
         self.current_accuracy = None
@@ -1389,13 +1399,10 @@ class C_HRAC(CentraliedAggregation):
         processed_norms = torch.norm(processed_tensor, dim=1)
         weighted_energy = torch.sum(weights_tensor * (processed_norms ** 2))
         g_sq = torch.norm(g_t) ** 2
-        honest_mask = [i for i, cid in enumerate(client_ids) if cid in self.honest_nodes]
-
-        for i, cid in enumerate(client_ids):
-            self._check_leq(f"iter{iteration}.global_clip[c{cid}]", clipped_norms[i].item(), B.item(), violations)
-        if len(honest_mask) > 0:
-            max_honest_norm = torch.max(norms[honest_mask]).item()
-            self._check_leq(f"iter{iteration}.median_cap_honest", B.item(), self.c_g * max_honest_norm, violations)
+        if self.enable_global_cap:
+            self._check_leq(f"iter{iteration}.global_cap_positive", -B.item(), 0.0, violations)
+            for i, cid in enumerate(client_ids):
+                self._check_leq(f"iter{iteration}.global_clip[c{cid}]", clipped_norms[i].item(), B.item(), violations)
 
         self._check_close(f"iter{iteration}.weight_sum", weights_tensor.sum().item(), 1.0, violations)
         for i, cid in enumerate(client_ids):
@@ -1403,7 +1410,7 @@ class C_HRAC(CentraliedAggregation):
             if use_nu_penalty_this_round:
                 self._check_leq(f"iter{iteration}.weight_cap[c{cid}]", weights_tensor[i].item(), self.nu_weight_max, violations)
         self._check_leq(f"iter{iteration}.jensen", g_sq.item(), weighted_energy.item(), violations)
-        if self.enable_post_residual_b_cap:
+        if self.enable_global_cap and self.enable_post_residual_b_cap:
             for i, cid in enumerate(client_ids):
                 self._check_leq(f"iter{iteration}.post_cap[c{cid}]", processed_norms[i].item(), B.item(), violations)
 
@@ -1468,13 +1475,34 @@ class C_HRAC(CentraliedAggregation):
         # 先 +1 再聚合/打日志，使 [HRAC] Iteration N 与主循环 iter N 一致
         self.iteration_count += 1
         
-        # --- Global robust norm cap (MSA defense: prevent attacker from controlling threshold) ---
-        # Aggregation: large norms → shrunk update; small norms → original update (scale_global only shrinks)
+        # --- Predictable global robust norm cap ---
+        # Current-round median updates the next round's EMA scale; the current cap
+        # uses the already stored scale, so it is predictable w.r.t. this round.
         norms = torch.norm(messages, dim=1)  # (N,)
         median_norm = torch.median(norms)
-        B = (self.c_g * median_norm).clamp_min(self.eps)
+        if self.enable_global_cap:
+            floor = torch.tensor(
+                max(float(self.global_scale_floor), float(self.eps)),
+                device=device,
+                dtype=dtype,
+            )
+            if self.global_scale_ema is None:
+                # Warm-start only: after this call, B_t is based on previous
+                # rounds through the EMA recursion below.
+                self.global_scale_ema = median_norm.detach().clone()
+            elif self.global_scale_ema.device != device or self.global_scale_ema.dtype != dtype:
+                self.global_scale_ema = self.global_scale_ema.to(device=device, dtype=dtype)
+            global_scale_for_cap = torch.maximum(self.global_scale_ema.detach(), floor)
+            B = (self.c_g * global_scale_for_cap).clamp_min(self.eps)
+        else:
+            global_scale_for_cap = median_norm.detach().clone()
+            B = norms.max().clamp_min(self.eps)
+        self._last_global_scale_for_cap = global_scale_for_cap.detach().clone()
         self._last_median_norm_prev_for_log = self.median_norm_prev  # save for log (before we overwrite at end of round)
-        scale_global = torch.minimum(torch.ones_like(norms), B / (norms + self.eps))
+        if self.enable_global_cap:
+            scale_global = torch.minimum(torch.ones_like(norms), B / (norms + self.eps))
+        else:
+            scale_global = torch.ones_like(norms)
         messages_clipped = messages * scale_global.unsqueeze(1)  # Clip all updates to global cap
 
         # 仅当存在 norm < 0.5*median 时启用 lift：把这些 client scale 到 median 用于 τ,μ,ν；否则完全按原始流程用真实值
@@ -1500,7 +1528,10 @@ class C_HRAC(CentraliedAggregation):
             delta_t_i = messages_clipped[i]
             if cid not in self.b:
                 new_cids.add(cid)
-                init_norm = median_norm.clamp_min(1.0)
+                # Match the proof invariant: the initial residual scale should
+                # not exceed the largest possible distance between two
+                # globally capped vectors.
+                init_norm = torch.minimum(median_norm.clamp_min(self.mu_min), 2.0 * B)
                 self.b[cid] = delta_t_i.detach().clone()
                 self.b_norm[cid] = (messages_eff[i] if has_small_norm else delta_t_i).detach().clone()
                 self.mu[cid] = init_norm.detach()
@@ -1541,7 +1572,7 @@ class C_HRAC(CentraliedAggregation):
                 r_bar = r
             delta_tilde = self.b[cid] + r_bar
             delta_tilde_pre_cap = delta_tilde.clone()
-            if self.enable_post_residual_b_cap:
+            if self.enable_global_cap and self.enable_post_residual_b_cap:
                 delta_tilde = delta_tilde * torch.minimum(self.one, B / (torch.norm(delta_tilde) + self.eps))
             processed.append(delta_tilde)
             r_bar_list.append(r_bar)
@@ -1554,7 +1585,7 @@ class C_HRAC(CentraliedAggregation):
                 else:
                     r_bar_norm = r_norm
                 delta_tilde_norm = self.b_norm[cid] + r_bar_norm
-                if self.enable_post_residual_b_cap:
+                if self.enable_global_cap and self.enable_post_residual_b_cap:
                     delta_tilde_norm = delta_tilde_norm * torch.minimum(self.one, B / (torch.norm(delta_tilde_norm) + self.eps))
                 r_bar_norm_list.append(r_bar_norm)
                 delta_tilde_norm_list.append(delta_tilde_norm)
@@ -1590,7 +1621,7 @@ class C_HRAC(CentraliedAggregation):
         processed_tensor = torch.stack(processed, dim=0)  # (N, D)
 
         # Calculate weights: use ν penalty only when iter > start_iter
-        use_nu_penalty_this_round = self.iteration_count > self.nu_penalty_start_iter
+        use_nu_penalty_this_round = self.enable_nu_weighting and self.iteration_count > self.nu_penalty_start_iter
         if use_nu_penalty_this_round:
             # Collect nu values for all clients (including new ones)
             nu_values = torch.empty(N, device=device, dtype=dtype)
@@ -1656,7 +1687,10 @@ class C_HRAC(CentraliedAggregation):
             
             # Aggregation path: update b from clipped/original update (optional: with momentum on the step)
             ds_norm = torch.norm(delta_processed) + self.eps
-            delta_safe_capped = delta_processed * torch.minimum(self.one, B / ds_norm)
+            if self.enable_global_cap:
+                delta_safe_capped = delta_processed * torch.minimum(self.one, B / ds_norm)
+            else:
+                delta_safe_capped = delta_processed
             self.b[cid] = (self.rho_b * self.b[cid] + (1.0 - self.rho_b) * delta_safe_capped).detach()
             # Stats path: 小 norm client 的 b_norm/μ/ν/r_prev 全部由 scale 后的量计算；仅聚合路径的 b 与 g_t 用未 scale 的数值
             self.b_norm[cid] = (self.rho_b * self.b_norm[cid] + (1.0 - self.rho_b) * delta_tilde_norm).detach()
@@ -1714,6 +1748,17 @@ class C_HRAC(CentraliedAggregation):
             log(msg)
             if self._hrac_log_buffer is not None:
                 self._hrac_log_buffer.append(time.strftime('[%y-%m-%d %H:%M:%S] ', time.localtime()) + msg)
+        # Update predictable global scale for the next round only after all
+        # current-round clipping decisions have been made.
+        if self.enable_global_cap:
+            self.global_scale_ema = (
+                self.rho_g * self.global_scale_ema
+                + (1.0 - self.rho_g) * median_norm.detach()
+            ).detach()
+            self._last_global_scale_next = self.global_scale_ema.detach().clone()
+        else:
+            self._last_global_scale_next = None
+
         # Update median_norm_prev for next round's ratio logging
         self.median_norm_prev = median_norm.item()
 
@@ -1729,7 +1774,9 @@ class C_HRAC(CentraliedAggregation):
                                 [self.nu[cid].item() if cid in self.nu else 0.0 for cid in client_ids],
                                 median_norm.item(), B.item(), scale_global,
                                 norms_pre.tolist(), norms_post.tolist(),
-                                weights_for_log, norms_final.tolist())
+                                weights_for_log, norms_final.tolist(),
+                                global_scale_for_cap=self._last_global_scale_for_cap.item() if self._last_global_scale_for_cap is not None else None,
+                                global_scale_next=self._last_global_scale_next.item() if self._last_global_scale_next is not None else None)
 
         if self.enable_invariant_checks:
             for i in range(len(client_debug)):
@@ -1753,7 +1800,8 @@ class C_HRAC(CentraliedAggregation):
 
     def _log_statistics(self, client_ids, tau_list, mu_list, nu_list,
                         median_norm=None, global_cap=None, scale_global=None,
-                        norms_pre=None, norms_post=None, weights=None, norms_final=None):
+                        norms_pre=None, norms_post=None, weights=None, norms_final=None,
+                        global_scale_for_cap=None, global_scale_next=None):
         """Log HRAC statistics; buffer for file, print to console. File written at flush_log_to_file()."""
         from ByrdLab.library.tool import log
         import os
@@ -1765,14 +1813,23 @@ class C_HRAC(CentraliedAggregation):
             log(s)
 
         add(f"[HRAC] Iteration {self.iteration_count} Statistics:")
+        if not self.enable_global_cap and self.iteration_count == 0:
+            add("  [Global median norm cap: OFF - using raw update norms]")
         if not self.enable_per_client_residual_clip and self.iteration_count == 0:
             add("  [Per-client residual clipping: OFF - using r_bar=r, r_bar_norm=r_norm]")
+        if not self.enable_nu_weighting and self.iteration_count == 0:
+            add("  [Nu weighting: OFF - using uniform weights for all rounds]")
         if not self.enable_post_residual_b_cap and self.iteration_count == 0:
             add("  [Post-residual B cap: OFF - no min(1,B/||delta_tilde||) after b+r_bar]")
         if self.current_accuracy is not None:
             add(f"  Accuracy: {self.current_accuracy:.4f}")
         if median_norm is not None and global_cap is not None:
-            add(f"  Global clip: median_norm={median_norm:.4f}, cap={global_cap:.4f} (c_g={self.c_g})")
+            scale_info = ""
+            if global_scale_for_cap is not None:
+                scale_info += f", scale_used={global_scale_for_cap:.4f}"
+            if global_scale_next is not None:
+                scale_info += f", scale_next={global_scale_next:.4f}"
+            add(f"  Global clip: median_norm={median_norm:.4f}, cap={global_cap:.4f} (c_g={self.c_g}, rho_g={self.rho_g}{scale_info})")
             if scale_global is not None:
                 scale_min = scale_global.min().item()
                 scale_max = scale_global.max().item()
