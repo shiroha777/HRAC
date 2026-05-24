@@ -1,8 +1,1104 @@
 \doublespacing % Do not change - required
 
-\chapter{Title of the Appendix}
+\chapter{Convergence Analysis of HRAC}
+\label{app:convergence-analysis}
 
 \thesisspacing % Do not change - required
 
-% Example text
-\kant[1]
+This appendix adapts the standalone convergence note in
+\texttt{prove.tex} to the thesis format. It contains the main proof chain
+needed for the report: HRAC is abstracted as a robust aggregation rule, the
+aggregate is compared with the ideal honest-client average, and the resulting
+aggregation error is inserted into a smooth non-convex descent argument.
+The proof has also been aligned with the implemented EMA-smoothed global norm
+cap used by the current HRAC code.
+
+The result should be read as an optimisation-layer stability guarantee. It
+does not claim that arbitrary Byzantine behaviour disappears; instead, it
+shows that under explicit boundedness, clipping-distortion, and residual
+Byzantine-mass assumptions, HRAC converges to a neighbourhood of first-order
+stationarity. The size of that neighbourhood is controlled by honest stochastic
+variation, non-IID bias, clipping distortion, and the remaining Byzantine
+aggregation error.
+
+\section{Introduction}
+
+The goal of this document is to give a mathematically clean convergence
+analysis for HRAC. Rather than proving the code line by line, we abstract HRAC
+as a robust aggregation rule and proceed in two steps:
+
+\begin{enumerate}[label=\arabic*.]
+    \item show that the HRAC aggregate remains close to the ideal honest
+    average update;
+    \item show that such an aggregation error can be absorbed into the descent
+    analysis of smooth non-convex optimisation.
+\end{enumerate}
+
+For the adaptive statistics, the main theorem-level target is not universal
+pointwise ordering between Byzantine and honest clients at every late-stage
+round. Instead, the primary claim is the weaker and empirically better-matched
+one: Byzantine clients exhibit a larger late-stage group-mean \(\nu\)-band,
+which induces stronger penalty pressure and smaller weights once the activation
+threshold becomes active. In particular, the intended mechanism is not that
+honest statistics vanish while Byzantine statistics remain nonzero. Rather,
+both groups may stay in positive late-stage bands, while Byzantine clients are
+typically elevated relative to the honest population. Pointwise separation is
+kept as a stronger sufficient refinement.
+
+\section{Problem Setup}
+
+Let \(x_t \in \R^d\) denote the global model at round \(t\).
+Suppose there are \(N\) participating clients, partitioned into an honest set
+\(\HH\) and a Byzantine set \(\BB\), with
+\[
+    |\HH| = H, \qquad |\BB| = B, \qquad N = H + B.
+\]
+
+At round \(t\), the server receives client updates
+\[
+    \{\Delta_i^t\}_{i=1}^N \subset \R^d,
+\]
+and performs the global update
+\begin{equation}
+    x_{t+1} = x_t - \eta_t g_t,
+    \label{eq:server_update}
+\end{equation}
+where \(g_t\) is the aggregate produced by HRAC.
+
+The ideal honest average update is defined as
+\begin{equation}
+    \bar{\Delta}_{\HH}^t
+    :=
+    \frac{1}{H} \sum_{i \in \HH} \Delta_i^t.
+    \label{eq:honest_average}
+\end{equation}
+
+The objective is to minimise a possibly non-convex function
+\[
+    f : \R^d \to \R.
+\]
+
+\section{HRAC Aggregation Rule}
+
+HRAC operates in three stages.
+
+\subsection{Global norm clipping}
+
+Define the round-wise median norm and its EMA-smoothed scale as
+\begin{align}
+    m_t &:= \med_{1 \le j \le N} \norm{\Delta_j^t},
+    \label{eq:median_norm_app}\\
+    \bar m_t &:= \rho_g \bar m_{t-1} + (1-\rho_g)m_t,
+    \label{eq:median_scale_app}
+\end{align}
+with the first round warm-starting \(\bar m\) from the observed median norm.
+The cap used during round \(t\) is the stored scale available at the start of
+the round,
+\begin{equation}
+    B_t := c_g \bar m_{t-1}.
+    \label{eq:global_cap}
+\end{equation}
+Thus the current round updates the next-round clipping scale, but does not
+immediately change its own threshold. The globally clipped update is
+\begin{equation}
+    \hat{\Delta}_i^t
+    :=
+    \clip(\Delta_i^t, B_t)
+    :=
+    \begin{cases}
+        \Delta_i^t, & \norm{\Delta_i^t} \le B_t,\\[2mm]
+        B_t \dfrac{\Delta_i^t}{\norm{\Delta_i^t}}, & \norm{\Delta_i^t} > B_t.
+    \end{cases}
+    \label{eq:global_clip}
+\end{equation}
+
+\subsection{Per-client history-residual clipping}
+
+For each client \(i\), HRAC maintains a history state
+\[
+    (b_i^t,\mu_i^t,\nu_i^t),
+\]
+where \(b_i^t\) is a running centre, \(\mu_i^t\) is a scale estimate, and
+\(\nu_i^t\) is a change statistic.
+
+Define the residual
+\begin{equation}
+    r_i^t := \hat{\Delta}_i^t - b_i^t,
+    \label{eq:residual}
+\end{equation}
+and the adaptive residual clipping threshold
+\begin{equation}
+    \tau_i^t := c \mu_i^t.
+    \label{eq:tau}
+\end{equation}
+
+The clipped residual is
+\begin{equation}
+    \bar{r}_i^t
+    :=
+    \clip(r_i^t, \tau_i^t)
+    =
+    \begin{cases}
+        r_i^t, & \norm{r_i^t} \le \tau_i^t,\\[2mm]
+        \tau_i^t \dfrac{r_i^t}{\norm{r_i^t}}, & \norm{r_i^t} > \tau_i^t.
+    \end{cases}
+    \label{eq:residual_clip}
+\end{equation}
+
+The post-processed message becomes
+\begin{equation}
+    \tilde{\Delta}_i^t := b_i^t + \bar{r}_i^t.
+    \label{eq:delta_tilde}
+\end{equation}
+
+The history centre \(b_i^t\) follows the implemented EMA dynamics:
+for a newly appearing client, \(b_i^t\) is initialized by
+\(\hat{\Delta}_i^t\); for later rounds,
+\begin{equation}
+    b_i^{t+1}
+    =
+    \rho_b\, b_i^t + (1-\rho_b)\,\Delta_{i,\mathrm{safe}}^t,
+    \label{eq:b_update}
+\end{equation}
+where \(\Delta_{i,\mathrm{safe}}^t\) is the aggregation-path message used in
+the server history update.
+
+% In the current implementation used in experiments
+% (\texttt{enable\_post\_residual\_b\_cap=False}), no additional post-cap is
+% applied to \(\tilde{\Delta}_i^t\) after residual reconstruction.
+
+\subsection{Adaptive weighting}
+
+HRAC assigns weights \(w_i^t \ge 0\) satisfying
+\begin{equation}
+    \sum_{i=1}^N w_i^t = 1,
+    \label{eq:weight_simplex}
+\end{equation}
+where the weights are determined from the statistics
+\(\{\nu_i^t\}_{i=1}^N\).
+
+The final aggregate is
+\begin{equation}
+    g_t = \sum_{i=1}^N w_i^t \tilde{\Delta}_i^t.
+    \label{eq:aggregate}
+\end{equation}
+
+\section{Assumptions}
+
+\begin{assumption}[Lower bounded objective]
+\label{ass:lower_bounded}
+\(f\) is bounded below: \(f(x)\ge f^\star\) for all \(x\in\R^d\).
+\end{assumption}
+
+\begin{assumption}[\(L\)-smoothness]
+\label{ass:smooth}
+\(\norm{\nabla f(x)-\nabla f(y)}\le L\norm{x-y}\) for all \(x,y\in\R^d\).
+\end{assumption}
+
+\begin{assumption}[Bias and variance of the honest average]
+\label{ass:bias_variance}
+Conditioned on \(\F_t\), the honest average has bounded bias and variance:
+\begin{equation}
+    \norm{
+        \E\!\left[\bar{\Delta}_{\HH}^t \mid \F_t\right] - \nabla f(x_t)
+    }
+    \le \xi,
+    \label{eq:bias}
+\end{equation}
+\begin{equation}
+    \E\!\left[
+        \norm{
+            \bar{\Delta}_{\HH}^t -
+            \E\!\left[\bar{\Delta}_{\HH}^t \mid \F_t\right]
+        }^2
+        \,\middle|\, \F_t
+    \right]
+    \le \frac{\sigma^2}{H}.
+    \label{eq:variance}
+\end{equation}
+\end{assumption}
+
+\begin{assumption}[Bounded honest update magnitude]
+\label{ass:honest_update_bound}
+There exists \(G_H<\infty\) such that for all honest clients \(i\in\HH\) and
+all rounds \(t\),
+\begin{equation}
+    \norm{\Delta_i^t}\le G_H.
+    \label{eq:honest_update_bound}
+\end{equation}
+\end{assumption}
+
+\begin{assumption}[Honest majority for robust median cap]
+\label{ass:honest_majority}
+The Byzantine population is strictly less than the honest population:
+\begin{equation}
+    B < H
+    \qquad(\text{equivalently } B < N/2).
+    \label{eq:honest_majority}
+\end{equation}
+\end{assumption}
+
+\begin{assumption}[Uniform honest global-clipping distortion]
+\label{ass:alpha_gc}
+There exists a constant \(\alpha_{\mathrm{gc}}\in[0,1]\) such that for every
+honest client \(i\in\HH\) and every round \(t\),
+\begin{equation}
+    \norm{\hat{\Delta}_i^t-\Delta_i^t}
+    \le
+    \alpha_{\mathrm{gc}} G_H.
+    \label{eq:alpha_gc}
+\end{equation}
+\end{assumption}
+
+\begin{assumption}[Uniform honest residual-clipping slack]
+\label{ass:alpha_rc}
+There exists a constant \(\alpha_{\mathrm{rc}}\in[0,1]\) such that for every
+honest client \(i\in\HH\) and every round \(t\),
+\begin{equation}
+    (\norm{r_i^t}-\tau_i^t)_+
+    \le
+    \alpha_{\mathrm{rc}} G_H.
+    \label{eq:alpha_rc}
+\end{equation}
+\end{assumption}
+
+\begin{assumption}[Uniform Byzantine mass and distortion control]
+\label{ass:beta_infty}
+There exist constants \(\beta_\infty\in[0,1]\) and \(C_w,C_m\ge 0\) such that
+for every round \(t\),
+\begin{align}
+    \beta_t &\le \beta_\infty,
+    \label{eq:beta_infty}\\
+    \varepsilon_{w,t} &\le C_w\,\beta_t,
+    \label{eq:epsw_beta_infty}\\
+    \sum_{j\in\BB} w_j^t \norm{\tilde{\Delta}_j^t}^2
+    &\le C_m\,\beta_t\,G_H^2.
+    \label{eq:byz_energy_beta_infty}
+\end{align}
+\end{assumption}
+
+\begin{remark}[How to instantiate \(\beta_\infty\)]
+\label{rem:beta_infty_instantiation}
+Assumption~\ref{ass:beta_infty} is stated abstractly so that the optimization
+theorem stays compatible with the implemented HRAC weighting rule. In an
+idealized exponential-weight model,
+\[
+    w_i^t
+    =
+    \frac{\exp(-\lambda \nu_i^t)}
+         {\sum_{k=1}^N \exp(-\lambda \nu_k^t)},
+\]
+if the late-stage separation condition
+\(
+\nu_j^t \ge \nu_i^t+\gamma
+\)
+holds for all \(j\in\BB\), \(i\in\HH\), then one may take
+\begin{equation}
+    \beta_\infty
+    :=
+    \frac{B e^{-\lambda\gamma}}
+         {H+B e^{-\lambda\gamma}}.
+    \label{eq:beta_infty_explicit}
+\end{equation}
+Thus the Byzantine contribution becomes a fully explicit closed constant.
+\end{remark}
+
+\section{Basic Properties of HRAC}
+
+\begin{lemma}[Boundedness of globally clipped inputs]
+\label{lem:bounded}
+For every round \(t\) and every client \(i\),
+\begin{equation}
+    \norm{\hat{\Delta}_i^t} \le B_t,
+    \label{eq:uniform_bound}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+The bound \(\norm{\hat{\Delta}_i^t} \le B_t\) follows directly from the
+definition of global clipping in~\eqref{eq:global_clip}.
+
+\end{proof}
+
+\begin{lemma}[EMA median-cap protection under honest majority]
+\label{lem:median_cap_honest}
+Under Assumptions~\ref{ass:honest_majority} and
+\ref{ass:honest_update_bound}, every round-wise median norm satisfies
+\begin{equation}
+    m_t
+    =
+    \med_{1\le j\le N}\norm{\Delta_j^t}
+    \le
+    \max_{i\in\HH}\norm{\Delta_i^t}
+    \le G_H.
+    \label{eq:median_honest_bound}
+\end{equation}
+If the EMA scale \(\bar m_t\) is warm-started from such a median norm and
+updated by \eqref{eq:median_scale_app}, then \(\bar m_t\le G_H\) for all
+rounds. Consequently,
+\begin{equation}
+    B_t
+    =
+    c_g \bar m_{t-1}
+    \le
+    c_g G_H.
+    \label{eq:ema_median_cap_bound}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+Because \(H>B\), more than half of the submitted norms are honest. Hence the
+median order statistic cannot exceed the largest honest norm, giving
+\eqref{eq:median_honest_bound}. The EMA recursion for \(\bar m_t\) is a convex
+combination of the previous scale and the current median norm. If both are at
+most \(G_H\), the next scale is also at most \(G_H\). Induction from the
+warm-start proves \(\bar m_t\le G_H\), and multiplying by \(c_g\) gives
+\eqref{eq:ema_median_cap_bound}.
+\end{proof}
+
+\begin{corollary}[Uniform cap bound from honest majority and bounded honest updates]
+\label{cor:Bmax_from_honest}
+Under Assumptions~\ref{ass:honest_majority} and
+\ref{ass:honest_update_bound},
+\begin{equation}
+    B_t
+    \le
+    c_g G_H
+    =: B_{\max},
+    \qquad \forall t.
+    \label{eq:Bmax_from_honest}
+\end{equation}
+\end{corollary}
+
+\begin{proof}
+This is exactly the cap bound in Lemma~\ref{lem:median_cap_honest}.
+\end{proof}
+\begin{lemma}[EMA boundedness for \(\mu_i^t\)]
+\label{lem:mu_ema_bounded}
+Suppose nonnegative scalars \(s_t\) satisfy \(s_t\le S_{\max}\) for all \(t\),
+and \(\mu_{t+1}=\rho_\mu\mu_t+(1-\rho_\mu)s_t\) with \(0<\rho_\mu<1\) and
+\(\mu_0\le S_{\max}\). Then \(\mu_t\le S_{\max}\) for all \(t\).
+\end{lemma}
+
+\begin{proof}
+Induction with convexity:
+\[
+    \mu_{t+1}
+    =
+    \rho_\mu\mu_t+(1-\rho_\mu)s_t
+    \le
+    \rho_\mu S_{\max}+(1-\rho_\mu)S_{\max}
+    =
+    S_{\max}.
+\]
+\end{proof}
+
+\begin{lemma}[Bounded history states under bounded global cap]
+\label{lem:mu_tau_bounded}
+Assume there exists \(B_{\max}<\infty\) such that \(B_t\le B_{\max}\) for all
+rounds \(t\), and the server-side history update uses the capped safe message
+(\(\norm{\Delta_{i,\mathrm{safe}}^t}\le B_t\), as in the implementation).
+Then for every client \(i\) and every \(t\):
+\begin{equation}
+    \norm{b_i^t}\le B_{\max},
+    \qquad
+    \norm{r_i^t}\le 2B_{\max},
+    \qquad
+    \mu_i^t\le 2B_{\max},
+    \qquad
+    \tau_i^t=c\mu_i^t\le 2cB_{\max}.
+    \label{eq:mu_tau_bounds}
+\end{equation}
+Moreover, the post-processed message is deterministically bounded:
+\begin{equation}
+    \norm{\tilde\Delta_i^t}\le (1+2c)B_{\max} := M_{\tilde\Delta}.
+    \label{eq:tilde_delta_det_bound}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+For \(b_i^t\), the initialization satisfies \(\norm{b_i^0}\le B_{\max}\) since
+it is set from a globally clipped message. If \(\norm{b_i^t}\le B_{\max}\), then
+\[
+    b_i^{t+1}
+    =
+    \rho_b b_i^t + (1-\rho_b)\Delta_{i,\mathrm{safe}}^t,
+    \qquad
+    \norm{\Delta_{i,\mathrm{safe}}^t}\le B_t\le B_{\max},
+\]
+so convexity gives \(\norm{b_i^{t+1}}\le B_{\max}\). Hence
+\(\norm{b_i^t}\le B_{\max}\) for all \(t\).
+
+Because \(\norm{\hat\Delta_i^t}\le B_t\le B_{\max}\),
+\[
+    \norm{r_i^t}
+    =
+    \norm{\hat\Delta_i^t-b_i^t}
+    \le
+    \norm{\hat\Delta_i^t}+\norm{b_i^t}
+    \le
+    2B_{\max}.
+\]
+If \(\mu_i^t\) is initialized at most \(2B_{\max}\) and updated by EMA of
+bounded residual magnitudes (implementation path), then
+Lemma~\ref{lem:mu_ema_bounded} gives \(\mu_i^t\le 2B_{\max}\); thus
+\(\tau_i^t=c\mu_i^t\le 2cB_{\max}\).
+
+Finally, \(\tilde\Delta_i^t=b_i^t+\bar r_i^t\) with
+\(\norm{\bar r_i^t}\le \tau_i^t\), so
+\[
+    \norm{\tilde\Delta_i^t}
+    \le
+    \norm{b_i^t}+\norm{\bar r_i^t}
+    \le
+    B_{\max}+2cB_{\max}
+    =
+    (1+2c)B_{\max}.
+\]
+\end{proof}
+
+\begin{lemma}[Aggregate second moment from deterministic cap chain]
+\label{lem:g_second_derived}
+Under Assumptions~\ref{ass:honest_majority} and
+\ref{ass:honest_update_bound}, for every \(t\), the aggregation output satisfies
+\begin{equation}
+    \E\!\left[\norm{g_t}^2 \mid \F_t\right]
+    \le
+    M_{\tilde\Delta}^2,
+    \qquad\text{hence}\qquad
+    \frac{1}{T}\sum_{t=0}^{T-1}\E\norm{g_t}^2 \le M_{\tilde\Delta}^2.
+    \label{eq:Gg_derived}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+By Corollary~\ref{cor:Bmax_from_honest}, \(B_t\le B_{\max}\) for all \(t\).
+Lemma~\ref{lem:mu_tau_bounded} then gives \(\norm{\tilde\Delta_i^t}\le M_{\tilde\Delta}\) deterministically for every client \(i\).
+Write \(g_t=\sum_{i=1}^N w_i^t \tilde{\Delta}_i^t\) with \(\sum_i w_i^t=1\),
+\(w_i^t\ge 0\). Jensen's inequality yields:
+\[
+    \norm{g_t}^2 = \norm{\sum_{i=1}^N w_i^t \tilde{\Delta}_i^t}^2
+    \le
+    \sum_{i=1}^N w_i^t \norm{\tilde{\Delta}_i^t}^2
+    \le
+    \sum_{i=1}^N w_i^t M_{\tilde\Delta}^2 = M_{\tilde\Delta}^2.
+\]
+Taking expectations preserves the bound.
+\end{proof}
+
+\begin{lemma}[Residual clipping bias identity]
+\label{lem:clip_identity}
+For every client \(i\) and round \(t\),
+\begin{equation}
+    \norm{\bar{r}_i^t - r_i^t}
+    =
+    (\norm{r_i^t} - \tau_i^t)_+,
+    \label{eq:clip_identity}
+\end{equation}
+where \((a)_+ := \max\{a,0\}\).
+As a consequence,
+\begin{equation}
+    \norm{\tilde{\Delta}_i^t - \hat{\Delta}_i^t}
+    =
+    (\norm{r_i^t} - \tau_i^t)_+.
+    \label{eq:delta_clip_identity}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+If \(\norm{r_i^t} \le \tau_i^t\), then \(\bar{r}_i^t = r_i^t\), so the
+left-hand side is \(0\), equal to
+\((\norm{r_i^t}-\tau_i^t)_+\).
+
+If \(\norm{r_i^t} > \tau_i^t\), then
+\[
+    \bar{r}_i^t = r_i^t \cdot \frac{\tau_i^t}{\norm{r_i^t}},
+\]
+hence
+\[
+    \norm{\bar{r}_i^t - r_i^t}
+    =
+    \left\|
+        r_i^t\left(\frac{\tau_i^t}{\norm{r_i^t}} - 1\right)
+    \right\|
+    =
+    \norm{r_i^t} - \tau_i^t.
+\]
+This proves~\eqref{eq:clip_identity}.
+Since
+\[
+    \tilde{\Delta}_i^t - \hat{\Delta}_i^t
+    =
+    (b_i^t+\bar{r}_i^t) - (b_i^t+r_i^t)
+    =
+    \bar{r}_i^t-r_i^t,
+\]
+we obtain~\eqref{eq:delta_clip_identity}.
+\end{proof}
+
+\section{Aggregation Error Analysis}
+
+Define the aggregation error
+\begin{equation}
+    e_t := g_t - \bar{\Delta}_{\HH}^t.
+    \label{eq:e_t}
+\end{equation}
+
+\begin{lemma}[Aggregation error decomposition]
+\label{lem:decomp}
+The error \(e_t\) admits the decomposition
+\begin{equation}
+    e_t
+    =
+    \underbrace{
+    \sum_{i \in \HH} w_i^t(\tilde{\Delta}_i^t - \Delta_i^t)
+    }_{=:A_t}
+    +
+    \underbrace{
+    \sum_{i \in \HH}
+    \left(w_i^t - \frac{1}{H}\right)\Delta_i^t
+    }_{=:W_t}
+    +
+    \underbrace{
+    \sum_{j \in \BB} w_j^t \tilde{\Delta}_j^t
+    }_{=:M_t}.
+    \label{eq:decomposition}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+From~\eqref{eq:aggregate},
+\[
+    g_t
+    =
+    \sum_{i \in \HH} w_i^t \tilde{\Delta}_i^t
+    +
+    \sum_{j \in \BB} w_j^t \tilde{\Delta}_j^t.
+\]
+Subtract \(\bar{\Delta}_{\HH}^t = \frac{1}{H}\sum_{i\in\HH}\Delta_i^t\) and
+add/subtract \(\sum_{i\in\HH} w_i^t \Delta_i^t\) to obtain
+\[
+    g_t - \bar{\Delta}_{\HH}^t
+    =
+    \sum_{i \in \HH} w_i^t(\tilde{\Delta}_i^t-\Delta_i^t)
+    +
+    \sum_{i \in \HH}
+    \left(w_i^t-\frac{1}{H}\right)\Delta_i^t
+    +
+    \sum_{j \in \BB} w_j^t \tilde{\Delta}_j^t.
+\]
+\end{proof}
+
+\begin{lemma}[Bounding each term of the decomposition]
+\label{lem:term_bounds}
+\begin{align}
+    \norm{A_t}^2
+    &\le
+    \sum_{i \in \HH} w_i^t \norm{\tilde{\Delta}_i^t-\Delta_i^t}^2,
+    \label{eq:A_t_bound}\\
+    \norm{W_t}^2
+    &\le
+    \varepsilon_{w,t}^2 \cdot \max_{i\in\HH}\norm{\Delta_i^t}^2,
+    \label{eq:W_t_bound}\\
+    \norm{M_t}^2
+    &\le
+    \beta_t \sum_{j\in\BB} w_j^t \norm{\tilde{\Delta}_j^t}^2.
+    \label{eq:M_t_bound}
+\end{align}
+Consequently,
+\begin{equation}
+    \norm{e_t}^2
+    \le
+    3\norm{A_t}^2 + 3\norm{W_t}^2 + 3\norm{M_t}^2.
+    \label{eq:e_abc}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+For \(A_t\), Jensen's inequality gives
+\[
+    \norm{A_t}^2
+    =
+    \left\|
+        \sum_{i \in \HH} w_i^t(\tilde{\Delta}_i^t-\Delta_i^t)
+    \right\|^2
+    \le
+    \sum_{i \in \HH} w_i^t \norm{\tilde{\Delta}_i^t-\Delta_i^t}^2.
+\]
+More explicitly, since \(\sum_{i\in\HH} w_i^t = 1-\beta_t \le 1\),
+weighted Cauchy--Schwarz yields
+\[
+    \norm{A_t}^2
+    \le
+    \left(\sum_{i\in\HH} w_i^t\right)
+    \left(\sum_{i\in\HH} w_i^t \norm{\tilde{\Delta}_i^t-\Delta_i^t}^2\right)
+    \le
+    \sum_{i\in\HH} w_i^t \norm{\tilde{\Delta}_i^t-\Delta_i^t}^2.
+\]
+
+For \(W_t\),
+\[
+    \norm{W_t}
+    \le
+    \sum_{i \in \HH}
+    \abs{w_i^t-\frac{1}{H}} \norm{\Delta_i^t}
+    \le
+    \varepsilon_{w,t} \max_{i\in\HH}\norm{\Delta_i^t},
+\]
+which yields~\eqref{eq:W_t_bound} after squaring.
+
+For \(M_t\), by Cauchy--Schwarz and \(\sum_{j\in\BB}w_j^t=\beta_t\),
+\[
+    \norm{M_t}
+    \le
+    \sum_{j\in\BB} w_j^t \norm{\tilde{\Delta}_j^t}
+\]
+and therefore
+\[
+    \norm{M_t}^2
+    \le
+    \left(\sum_{j\in\BB}w_j^t\right)
+    \left(\sum_{j\in\BB}w_j^t\norm{\tilde{\Delta}_j^t}^2\right)
+    =
+    \beta_t\sum_{j\in\BB}w_j^t\norm{\tilde{\Delta}_j^t}^2.
+\]
+which is exactly~\eqref{eq:M_t_bound}.
+
+Finally,
+\[
+    e_t = A_t + W_t + M_t,
+\]
+so
+\[
+    \norm{e_t}^2
+    \le
+    3\norm{A_t}^2 + 3\norm{W_t}^2 + 3\norm{M_t}^2.
+\]
+\end{proof}
+
+\begin{lemma}[Explicit honest clipping bias bound]
+\label{lem:honest_clip}
+For every honest client \(i \in \HH\),
+\begin{equation}
+    \norm{\tilde{\Delta}_i^t-\Delta_i^t}^2
+    \le
+    2\norm{\hat{\Delta}_i^t-\Delta_i^t}^2
+    +
+    2(\norm{r_i^t}-\tau_i^t)_+^2.
+    \label{eq:honest_clip_bound}
+\end{equation}
+Therefore,
+\begin{equation}
+    \sum_{i \in \HH} w_i^t \norm{\tilde{\Delta}_i^t-\Delta_i^t}^2
+    \le
+    2\sum_{i \in \HH} w_i^t \norm{\hat{\Delta}_i^t-\Delta_i^t}^2
+    +
+    2\sum_{i \in \HH} w_i^t (\norm{r_i^t}-\tau_i^t)_+^2.
+    \label{eq:honest_clip_sum}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+Using
+\[
+    \tilde{\Delta}_i^t-\Delta_i^t
+    =
+    (\tilde{\Delta}_i^t-\hat{\Delta}_i^t)
+    +
+    (\hat{\Delta}_i^t-\Delta_i^t),
+\]
+we have
+\[
+    \norm{\tilde{\Delta}_i^t-\Delta_i^t}^2
+    \le
+    2\norm{\tilde{\Delta}_i^t-\hat{\Delta}_i^t}^2
+    +
+    2\norm{\hat{\Delta}_i^t-\Delta_i^t}^2.
+\]
+Lemma~\ref{lem:clip_identity} gives
+\[
+    \norm{\tilde{\Delta}_i^t-\hat{\Delta}_i^t}^2
+    =
+    (\norm{r_i^t}-\tau_i^t)_+^2.
+\]
+Substituting yields~\eqref{eq:honest_clip_bound}. Summing with weights
+\(w_i^t\) gives~\eqref{eq:honest_clip_sum}.
+\end{proof}
+
+\begin{lemma}[Overall aggregation error bound]
+\label{lem:agg_bound}
+\begin{align}
+    \norm{e_t}^2
+    \le\;&
+    6\sum_{i \in \HH} w_i^t \norm{\hat{\Delta}_i^t-\Delta_i^t}^2
+    +
+    6\sum_{i \in \HH} w_i^t (\norm{r_i^t}-\tau_i^t)_+^2
+    \nonumber\\
+    &+
+    3\varepsilon_{w,t}^2 \max_{i\in\HH}\norm{\Delta_i^t}^2
+    +
+    3\beta_t \sum_{j\in\BB} w_j^t \norm{\tilde{\Delta}_j^t}^2.
+    \label{eq:agg_error_final}
+\end{align}
+\end{lemma}
+
+\begin{proof}
+Combine Lemma~\ref{lem:term_bounds} with
+Lemma~\ref{lem:honest_clip}.
+\end{proof}
+
+\section{From Honest Average to the True Gradient}
+
+\begin{lemma}[Deviation of the honest average from the true gradient]
+\label{lem:honest_gradient}
+Under Assumption~\ref{ass:bias_variance},
+\begin{equation}
+    \E\!\left[
+        \norm{\bar{\Delta}_{\HH}^t - \nabla f(x_t)}^2
+        \,\middle|\, \F_t
+    \right]
+    \le
+    \frac{\sigma^2}{H} + \xi^2.
+    \label{eq:honest_gradient_gap}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+Write
+\[
+    \bar{\Delta}_{\HH}^t - \nabla f(x_t)
+    =
+    \left(
+        \bar{\Delta}_{\HH}^t -
+        \E[\bar{\Delta}_{\HH}^t \mid \F_t]
+    \right)
+    +
+    \left(
+        \E[\bar{\Delta}_{\HH}^t \mid \F_t] - \nabla f(x_t)
+    \right).
+\]
+Using the variance bound~\eqref{eq:variance} and the bias bound~\eqref{eq:bias}
+gives the result.
+\end{proof}
+
+\section{One-Step Descent Analysis}
+
+\begin{lemma}[One-step descent inequality]
+\label{lem:descent}
+Suppose Assumptions~\ref{ass:lower_bounded} to \ref{ass:honest_majority}
+hold.
+Then, for any step size \(\eta_t > 0\),
+\begin{align}
+    \E[f(x_{t+1})]
+    \le\;&
+    \E[f(x_t)]
+    -
+    \frac{\eta_t}{2}\E\norm{\nabla f(x_t)}^2
+    \nonumber\\
+    &+
+    \eta_t \E\norm{e_t}^2
+    +
+    \eta_t\left(\frac{\sigma^2}{H}+\xi^2\right)
+    +
+    \frac{L\eta_t^2}{2}\E\norm{g_t}^2.
+    \label{eq:descent}
+\end{align}
+\end{lemma}
+
+\begin{proof}
+By Assumption~\ref{ass:smooth},
+\[
+    f(x_{t+1})
+    \le
+    f(x_t)
+    +
+    \langle \nabla f(x_t), x_{t+1}-x_t \rangle
+    +
+    \frac{L}{2}\norm{x_{t+1}-x_t}^2.
+\]
+Substituting \(x_{t+1}=x_t-\eta_t g_t\) gives
+\[
+    f(x_{t+1})
+    \le
+    f(x_t)
+    -
+    \eta_t \langle \nabla f(x_t), g_t \rangle
+    +
+    \frac{L\eta_t^2}{2}\norm{g_t}^2.
+\]
+
+Using the identity \(-\langle a, b \rangle = -\frac{1}{2}\norm{a}^2 - \frac{1}{2}\norm{b}^2 + \frac{1}{2}\norm{a-b}^2\), we can rewrite the inner product exactly as:
+\[
+    -\langle \nabla f(x_t), g_t \rangle
+    =
+    -\frac{1}{2}\norm{\nabla f(x_t)}^2
+    - \frac{1}{2}\norm{g_t}^2
+    + \frac{1}{2}\norm{g_t - \nabla f(x_t)}^2.
+\]
+Since \(-\frac{1}{2}\norm{g_t}^2 \le 0\), we drop it for an upper bound:
+\[
+    -\langle \nabla f(x_t), g_t \rangle
+    \le
+    -\frac{1}{2}\norm{\nabla f(x_t)}^2
+    + \frac{1}{2}\norm{g_t - \nabla f(x_t)}^2.
+\]
+Now, using the decomposition \(g_t = \bar{\Delta}_{\HH}^t + e_t\), and applying the inequality \(\norm{a+b}^2 \le 2\norm{a}^2 + 2\norm{b}^2\), we bound the distance between the aggregate and the true gradient:
+\[
+    \norm{g_t - \nabla f(x_t)}^2
+    =
+    \norm{e_t + \bar{\Delta}_{\HH}^t - \nabla f(x_t)}^2
+    \le
+    2\norm{e_t}^2 + 2\norm{\bar{\Delta}_{\HH}^t - \nabla f(x_t)}^2.
+\]
+Substituting this back into the smoothness inequality yields:
+\[
+    f(x_{t+1})
+    \le
+    f(x_t)
+    - \frac{\eta_t}{2}\norm{\nabla f(x_t)}^2
+    + \eta_t\norm{e_t}^2
+    + \eta_t\norm{\bar{\Delta}_{\HH}^t - \nabla f(x_t)}^2
+    + \frac{L\eta_t^2}{2}\norm{g_t}^2.
+\]
+Taking the conditional expectation \(\E[\cdot \mid \F_t]\) on both sides and applying Lemma~\ref{lem:honest_gradient} for the honest average deviation yields the final result \eqref{eq:descent}.
+\end{proof}
+
+\section{Main Convergence Theorem}
+
+\begin{proposition}[Uniform constant aggregation-error bound]
+\label{prop:tight_floor_beta2}
+Under Assumptions~\ref{ass:honest_update_bound},
+\ref{ass:alpha_gc}, \ref{ass:alpha_rc}, and \ref{ass:beta_infty}, the HRAC
+aggregation error satisfies, for every round \(t\),
+\begin{equation}
+    \E\norm{e_t}^2 \le C_{\mathrm{agg}},
+    \label{eq:agg_error_constant}
+\end{equation}
+where
+\begin{align}
+    C_{\mathrm{clip}}
+    &:=
+    6\alpha_{\mathrm{gc}}^2 G_H^2,
+    \label{eq:C_clip}\\
+    C_{\mathrm{res}}
+    &:=
+    6\alpha_{\mathrm{rc}}^2 G_H^2,
+    \label{eq:C_res}\\
+    C_{\mathrm{byz}}
+    &:=
+    3(C_w^2+C_m)\beta_\infty^2 G_H^2,
+    \label{eq:C_byz}\\
+    C_{\mathrm{agg}}
+    &:=
+    C_{\mathrm{clip}}+C_{\mathrm{res}}+C_{\mathrm{byz}}.
+    \label{eq:C_agg}
+\end{align}
+\end{proposition}
+
+\begin{proof}
+By Assumption~\ref{ass:alpha_gc},
+\[
+    6\sum_{i\in\HH} w_i^t \norm{\hat{\Delta}_i^t-\Delta_i^t}^2
+    \le
+    6\sum_{i\in\HH} w_i^t \alpha_{\mathrm{gc}}^2 G_H^2
+    \le
+    6\alpha_{\mathrm{gc}}^2 G_H^2
+    =
+    C_{\mathrm{clip}}.
+\]
+By Assumption~\ref{ass:alpha_rc},
+\[
+    6\sum_{i\in\HH} w_i^t (\norm{r_i^t}-\tau_i^t)_+^2
+    \le
+    6\sum_{i\in\HH} w_i^t \alpha_{\mathrm{rc}}^2 G_H^2
+    \le
+    6\alpha_{\mathrm{rc}}^2 G_H^2
+    =
+    C_{\mathrm{res}}.
+\]
+By Assumptions~\ref{ass:honest_update_bound} and \ref{ass:beta_infty},
+\[
+    3\varepsilon_{w,t}^2\max_{i\in\HH}\norm{\Delta_i^t}^2
+    \le
+    3(C_w\beta_t)^2 G_H^2
+    \le
+    3C_w^2\beta_\infty^2 G_H^2,
+\]
+and
+\[
+    3\beta_t \sum_{j\in\BB} w_j^t \norm{\tilde{\Delta}_j^t}^2
+    \le
+    3\beta_t(C_m\beta_t G_H^2)
+    \le
+    3C_m\beta_\infty^2 G_H^2.
+\]
+Combining these two displays yields \(C_{\mathrm{byz}}\). Finally, apply
+Lemma~\ref{lem:agg_bound}.
+\end{proof}
+
+\begin{theorem}[Convergence to a tight HRAC constant neighbourhood]
+\label{thm:main}
+Suppose Assumptions~\ref{ass:lower_bounded} to \ref{ass:beta_infty} hold.
+Let the step size be constant and satisfy
+\begin{equation}
+    0 < \eta \le \frac{1}{2L}.
+    \label{eq:stepsize}
+\end{equation}
+Define
+\begin{equation}
+    G_g := M_{\tilde\Delta}.
+    \label{eq:Gg_constant}
+\end{equation}
+Define the explicit HRAC neighbourhood radius
+\begin{equation}
+    R_{\mathrm{HRAC}}
+    :=
+    2\left(\frac{\sigma^2}{H}+\xi^2\right)
+    +
+    L\eta G_g^2
+    +
+    2C_{\mathrm{agg}}.
+    \label{eq:R_HRAC}
+\end{equation}
+Then, for every \(T\ge 1\),
+\begin{equation}
+    \frac{1}{T}\sum_{t=0}^{T-1}\E\norm{\nabla f(x_t)}^2
+    \le
+    \frac{2(f(x_0)-f^\star)}{\eta T}
+    +
+    R_{\mathrm{HRAC}}.
+    \label{eq:main_full}
+\end{equation}
+Consequently,
+\begin{equation}
+    \limsup_{T\to\infty}
+    \frac{1}{T}\sum_{t=0}^{T-1}\E\norm{\nabla f(x_t)}^2
+    \le
+    R_{\mathrm{HRAC}}.
+    \label{eq:main_limsup}
+\end{equation}
+Therefore HRAC converges to a first-order stationary neighbourhood with an
+explicit, time-independent radius.
+\end{theorem}
+
+\begin{proof}
+Sum the one-step descent inequality~\eqref{eq:descent} from \(t=0\) to
+\(T-1\):
+\begin{align*}
+    \E[f(x_T)]
+    \le\;&
+    f(x_0)
+    -
+    \frac{\eta}{2}\sum_{t=0}^{T-1}\E\norm{\nabla f(x_t)}^2
+    \\
+    &+
+    \eta\sum_{t=0}^{T-1}\E\norm{e_t}^2
+    +
+    \eta T\left(\frac{\sigma^2}{H}+\xi^2\right)
+    +
+    \frac{L\eta^2}{2}\sum_{t=0}^{T-1}\E\norm{g_t}^2.
+\end{align*}
+Since \(f(x_T)\ge f^\star\), rearranging gives
+\[
+    \frac{1}{T}\sum_{t=0}^{T-1}\E\norm{\nabla f(x_t)}^2
+    \le
+    \frac{2(f(x_0)-f^\star)}{\eta T}
+    +
+    \frac{2}{T}\sum_{t=0}^{T-1}\E\norm{e_t}^2
+    +
+    2\left(\frac{\sigma^2}{H}+\xi^2\right)
+    +
+    \frac{L\eta}{T}\sum_{t=0}^{T-1}\E\norm{g_t}^2.
+\]
+By Lemma~\ref{lem:g_second_derived},
+\(
+\E\norm{g_t}^2 \le M_{\tilde\Delta}^2
+\)
+for every \(t\), and by Proposition~\ref{prop:tight_floor_beta2},
+\(
+\E\norm{e_t}^2 \le C_{\mathrm{agg}}
+\)
+for every \(t\). Substituting these uniform bounds yields
+\eqref{eq:main_full}. Taking \(\limsup\) eliminates the vanishing optimization
+term \(2(f(x_0)-f^\star)/(\eta T)\) and gives \eqref{eq:main_limsup}.
+\end{proof}
+
+\begin{corollary}[Closed-form HRAC constant interval]
+\label{cor:refined_beta2_floor}
+Under the assumptions of Theorem~\ref{thm:main},
+\begin{align}
+    R_{\mathrm{HRAC}}
+    =\;&
+    2\left(\frac{\sigma^2}{H}+\xi^2\right)
+    +
+    L\eta G_g^2
+    \nonumber\\
+    &+
+    12\alpha_{\mathrm{gc}}^2 G_H^2
+    +
+    12\alpha_{\mathrm{rc}}^2 G_H^2
+    +
+    6(C_w^2+C_m)\beta_\infty^2 G_H^2.
+    \label{eq:R_HRAC_explicit}
+\end{align}
+Hence the averaged stationarity measure is asymptotically confined to the
+explicit interval
+\begin{equation}
+    0
+    \le
+    \limsup_{T\to\infty}
+    \frac{1}{T}\sum_{t=0}^{T-1}\E\norm{\nabla f(x_t)}^2
+    \le
+    R_{\mathrm{HRAC}}.
+    \label{eq:HRAC_interval}
+\end{equation}
+\end{corollary}
+
+\begin{remark}[Same theorem in schematic constant form]
+\label{rem:schematic_R_HRAC}
+If one prefers the theorem-level presentation
+\[
+    R_{\mathrm{HRAC}}
+    =
+    2\left(\frac{\sigma^2}{H}+\xi^2\right)
+    +
+    L\eta G_g^2
+    +
+    C_{\mathrm{clip}}^{\mathrm{eff}}
+    +
+    C_{\mathrm{res}}^{\mathrm{eff}}
+    +
+    C_{\mathrm{byz}}^{\mathrm{eff}},
+\]
+then the effective constants in the present proof are
+\[
+    C_{\mathrm{clip}}^{\mathrm{eff}}
+    := 12\alpha_{\mathrm{gc}}^2 G_H^2,\qquad
+    C_{\mathrm{res}}^{\mathrm{eff}}
+    := 12\alpha_{\mathrm{rc}}^2 G_H^2,\qquad
+    C_{\mathrm{byz}}^{\mathrm{eff}}
+    := 6(C_w^2+C_m)\beta_\infty^2 G_H^2.
+\]
+The factor \(2\) relative to the raw aggregation-error constants
+\eqref{eq:C_clip}--\eqref{eq:C_byz} comes from the descent step
+\(
+\frac{2}{T}\sum_t \E\norm{e_t}^2
+\)
+in \eqref{eq:main_full}.
+\end{remark}
+
+\begin{corollary}[Interpretation as a tight stationary neighbourhood]
+\label{cor:vanishing}
+Under the assumptions of Theorem~\ref{thm:main}, HRAC converges sublinearly to
+a first-order stationary neighbourhood of radius \(R_{\mathrm{HRAC}}\). In
+particular, the long-run averaged squared gradient norm is controlled by a
+tight constant composed of:
+\begin{enumerate}[label=\arabic*.]
+    \item stochastic honest estimation error \(2(\sigma^2/H+\xi^2)\);
+    \item optimization discretization error \(L\eta M_{\tilde\Delta}^2\);
+    \item honest global-clipping distortion \(12\alpha_{\mathrm{gc}}^2G_H^2\);
+    \item honest residual-clipping distortion \(12\alpha_{\mathrm{rc}}^2G_H^2\);
+    \item residual Byzantine mass and honest-weight distortion
+    \(6(C_w^2+C_m)\beta_\infty^2G_H^2\).
+\end{enumerate}
+\end{corollary}

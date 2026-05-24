@@ -1,6 +1,6 @@
 \doublespacing % Do not change - required
 
-\chapter{Reflections}
+\chapter{Professional Issues and Project Management}
 \label{chLast}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -11,25 +11,23 @@
 \thesisspacing
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-\begin{bodytwocol}
-
 \section{Project Plan}
 
-The project was organised into work packages (WPs) that mirror both the required dissertation structure and the technical workflow of building, analysing, and validating a robust federated learning defence. Each WP specifies a concrete objective, deliverables, and acceptance criteria. Early effort was intentionally concentrated on establishing a reliable experimental pipeline (datasets, training loop, attack baselines, and logging/plotting), ensuring that later conclusions would not be limited by tooling or reproducibility issues.
+The project was organised into work packages (WPs) covering literature review, baseline reproduction, attack integration, HRAC implementation, experimental evaluation, and final write-up. Early effort was concentrated on establishing a reliable experimental pipeline, including datasets, training loops, attack baselines, logging, and plotting, so that later conclusions would not be limited by tooling or reproducibility issues.
 
-Progress was managed through weekly milestones that were defined in terms of measurable outcomes rather than purely time-based targets. Core milestones included: (i) reproducing a stable FedAvg baseline under benign training, (ii) implementing and validating each attack setting, (iii) integrating HRAC into the training loop with consistent configuration management, and (iv) generating diagnostic artefacts such as $\tau/\mu/\nu$ traces, aggregation weights, and attacker-aware bottom-weight summaries. When outcomes deviated from expectations, the plan was revised by updating estimates and re-prioritising tasks, particularly during phases where debugging and experimental variance dominated progress.
+Progress was managed through weekly milestones defined by measurable outcomes rather than only dates. Core milestones included reproducing a stable benign baseline, validating each attack setting, integrating HRAC into the common training loop, and producing result tables, ablations, and diagnostic logs. When outcomes deviated from expectations, the plan was revised by updating estimates and re-prioritising tasks, particularly during phases where debugging and experimental variance dominated progress.
 
-Risk management focused on three primary uncertainties: training instability under non-IID partitions, sensitivity of robust aggregation to hyperparameters, and limited turnaround time for supervisor feedback. Mitigations were built into the plan via staged evaluation (IID before non-IID), bounded hyperparameter exploration with fixed seeds, and early production of intermediate results suitable for review. A contingency path was also defined: if the proposed method did not consistently outperform strong baselines, the project would still deliver a defensible contribution through ablation studies and failure-mode analysis, supported by controlled comparisons and clear diagnostics. After the Interim Report milestone, emphasis shifts from implementation completeness to evidence quality, with priority on broader evaluation coverage, targeted ablations to justify individual components, and tightening reproducibility and presentation for the final dissertation.
+Risk management focused on training instability under non-IID partitions, hyperparameter sensitivity, and limited feedback cycles. Mitigations included staged evaluation from IID to non-IID settings, fixed configurations for main comparisons, and early production of intermediate results. A contingency path was also defined: if HRAC did not consistently outperform strong baselines, the project would still deliver a defensible contribution through ablation studies, failure-mode analysis, and clear reporting of limitations.
 
 \section{Evaluation Plan}
 
-The evaluation was structured to produce defensible evidence along three axes: benign utility, robustness under Byzantine behaviour, and the interpretability of HRAC's internal residual and weighting signals. The core questions guiding the evaluation are whether the method (i) preserves standard learning performance when all clients are benign, (ii) mitigates malicious participation without relying on oracle knowledge (e.g., attacker identities or exact attacker fraction), and (iii) yields diagnostics that meaningfully correlate with abnormal client behaviour.
+The evaluation was structured around three questions: whether HRAC preserves benign utility, whether it improves robustness under Byzantine behaviour without oracle attacker labels, and whether its logged residual and weighting signals help explain the observed behaviour.
 
-The experimental design spans multiple conditions to reflect realistic variation. Results are reported across IID and non-IID data partitions, multiple attacker fractions, and a set of attack types that includes both conspicuous manipulations (e.g., norm scaling, label flipping) and more stealthy or variance-bounded strategies. All methods are evaluated under matched training settings. Comparisons include standard averaging and representative robust aggregators to quantify robustness--utility trade-offs under identical pipelines.
+Results are reported across IID and non-IID partitions, with the main CIFAR-10 attack settings using $b=3$ malicious clients out of $N=10$. The attack set includes protocol-compliant label flipping, structural model manipulation, history-aware manipulation, and variance- or direction-based attacks. All methods are evaluated under matched training settings, and the limited seed and attacker-fraction coverage is reported explicitly in Chapter~\ref{ch:experiments-results}.
 
-Success is measured using both learning outcomes and robustness/diagnostic indicators. Primary learning metrics include training stability and final test accuracy. Robustness is evaluated through performance degradation under attack and training stability. Diagnostic interpretability is captured via per-round statistics such as residual thresholds, $\mu/\nu$ histories, normalised weight distributions, and attacker-aware bottom-weight summaries computed in controlled settings by comparing the lowest-weight clients to known attackers.
+Success is measured primarily through test-accuracy trajectories, final and best accuracy, and component ablations. Diagnostic logs, including residual thresholds, $\mu/\nu$ histories, normalised weights, and attacker-aware summaries, are used to support interpretation rather than to define success alone.
 
-Component-level justification is provided through ablation studies that remove or disable individual HRAC mechanisms (e.g., global norm clipping, per-client residual clipping, post-residual capping, $\nu$-based weighting, and history smoothing) while keeping all other settings fixed. These ablations are used to expose failure modes, including excessive suppression of benign non-IID clients or insufficient suppression of stealthy adversaries. Where sensitivity is observed, additional runs with different random seeds are used to confirm whether trends are consistent. Reproducibility is supported by fixed seeds, logged configurations, and standardised plots/tables across all methods, with the experiment set iteratively refined to remain minimal while still separating competing explanations for observed behaviour.
+Component-level justification is provided through ablation studies that disable individual HRAC mechanisms while keeping the surrounding pipeline fixed. Reproducibility is supported by cached records, logged configurations, and standardised plots and tables across methods. Additional seeds, datasets, and attacker fractions remain important extensions beyond the current scope.
 
 \section{Legal and Ethical Matters}
 
@@ -71,4 +69,3 @@ The main remaining risks are minimal and relate to good computing practice: ensu
 stored securely, avoiding any sensitive or personally identifiable data in datasets/logs, and documenting
 the experimental setup to prevent misuse or misinterpretation of results. Any future deployment in
 safety-critical domains would require a separate, domain-specific safety assessment.
-\end{bodytwocol}

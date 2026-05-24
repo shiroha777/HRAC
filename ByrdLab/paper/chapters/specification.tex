@@ -21,7 +21,7 @@ At each communication round $t$, the server receives a set of client updates $\{
 \section{Project Deliverables}
 The project will deliver the following artefacts:
 \begin{itemize}
-    \item \textbf{Robust aggregation implementation:} a modular server-side aggregation component (PyTorch-based) implementing the proposed \emph{HSM-Adaptive} method and baseline aggregators within a federated learning pipeline.
+    \item \textbf{Robust aggregation implementation:} a modular server-side aggregation component (PyTorch-based) implementing the proposed \emph{HRAC} method and baseline aggregators within a federated learning pipeline.
     \item \textbf{Attack and evaluation suite:} implementations of representative Byzantine attacks (including impulsive and stealthy/history-aware strategies) and experimental configurations for IID and non-IID client partitions.
     \item \textbf{Reproducible experiments:} scripts and configuration files to reproduce all reported results, including fixed random seeds where appropriate and clear documentation of hyperparameters.
     \item \textbf{Diagnostics and logging:} per-round logging of trust/weight statistics (e.g., trust distributions, effective number of clients, precision/recall proxies) to support interpretability and failure-mode analysis.
@@ -39,13 +39,13 @@ The scope of the project is restricted to server-side aggregation in a standard 
 The project does not aim to address secure aggregation protocols, cryptographic privacy guarantees, or client-side defences beyond what is required to generate standard local updates.
 
 \section{Method Overview}
-The proposed method, \emph{HSM-Adaptive}, computes a soft trust score for each client update by combining complementary signals:
+The proposed method, \emph{HRAC}, computes a robust aggregated update by combining complementary mechanisms:
 \begin{itemize}
-    \item \textbf{Population alignment:} cosine alignment of $\Delta_{t,i}$ with a server-side reference direction (previous aggregate or momentum), robustly centred using the median to reduce sensitivity to non-IID shifts.
-    \item \textbf{Self-consistency:} agreement between a client's current update structure and its own historical behaviour, estimated using a low-dimensional sign-sketch representation to tolerate noise while remaining sensitive to abrupt behavioural change.
-    \item \textbf{Scale deviation:} a robust log-ratio measure comparing the current update norm to the client's historical norm profile to detect abnormal scaling.
+    \item \textbf{Global magnitude control:} a median-based norm cap limits extreme updates before aggregation.
+    \item \textbf{Per-client residual clipping:} each client is compared with its own historical centre rather than a single global population centre.
+    \item \textbf{Temporal weighting:} residual-change statistics are tracked with EMA summaries and used for soft weighting after a warm-up period.
 \end{itemize}
-These signals are combined into a continuous trust score and transformed into multiplicative aggregation weights using smooth gating functions, avoiding hard exclusion and improving stability under benign heterogeneity.
+These mechanisms avoid hard exclusion and are designed to improve stability under benign heterogeneity.
 
 \section{Success Criteria}
 The project will be considered successful if the proposed aggregation method satisfies the following criteria:
@@ -65,4 +65,3 @@ The following items are explicitly out of scope for this project:
     \item defences requiring trusted hardware or client attestation;
     \item deployment-specific engineering (e.g., mobile on-device optimisation, production networking stack).
 \end{itemize}
-

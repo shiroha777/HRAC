@@ -40,7 +40,7 @@
 \author{Y. Huang}
 \cid{02196656}
 \supervisor{Dr V. Stefan } %UK: Dr no dot, prof has dot
-\submityear{2025}
+\submityear{2026}
 
 % PICK A COURSE FROM THE LIST BELOW 
 % DO NOT MODIFY THE NAMES
@@ -80,7 +80,7 @@
 % THESE ADDITIONAL SETTINGS HAVE BEEN ASKED BY THE MEng COMMITTEE BUT NOT BY THE MSC COMMITTEE
 % Is this an interim report or final thesis?
 \setboolean{final_thesis}{true} % true for final Thesis / false for interim report
-\secondmarker{} %If you do not know who your second marker is, use \secondmarker{}
+\secondmarker{TBC} %If you do not know who your second marker is, use \secondmarker{}
 
 %%%%%%%%%%%%% END SETUP %%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -92,11 +92,15 @@
 %Examples
 \usepackage{amsmath}
 \usepackage{amsfonts} 
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
 \usepackage{url}   
 \usepackage{subcaption}
 \usepackage{enumitem}
-\usepackage{multicol}
-\usepackage{ragged2e}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
 
 %...
 
@@ -105,6 +109,26 @@
 \DeclareMathOperator{\diag}{diag}
 \DeclareMathOperator{\vect}{vec}
 %...
+\newtheorem{assumption}{Assumption}
+\newtheorem{lemma}{Lemma}
+\newtheorem{theorem}{Theorem}
+\newtheorem{corollary}{Corollary}
+\newtheorem{proposition}{Proposition}
+\newtheorem{definition}{Definition}
+\newtheorem{condition}{Condition}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+\providecommand{\R}{\mathbb{R}}
+\providecommand{\E}{\mathbb{E}}
+\providecommand{\F}{\mathcal{F}}
+\providecommand{\HH}{\mathcal{H}}
+\providecommand{\BB}{\mathcal{B}}
+\providecommand{\clip}{\operatorname{clip}}
+\providecommand{\med}{\operatorname{med}}
+\providecommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\providecommand{\abs}[1]{\left\lvert #1 \right\rvert}
+
 % --- Author-year citation (without changing biblatex style option) ---
 \DeclareCiteCommand{\aycite}
   {\boolfalse{citetracker}\boolfalse{pagetracker}}
@@ -117,23 +141,6 @@
   {\printnames{labelname}\space(\printfield{year})}
   {\multicitedelim}
   {}
-
-\setlength{\columnsep}{0.8cm}
-\setlength{\columnseprule}{0pt}
-
-\titleformat{\section}
-  {\normalfont\large\bfseries}
-  {\thesection}{0.7em}{}
-\titlespacing*{\section}{0pt}{1.4ex plus 0.4ex minus 0.2ex}{0.7ex}
-
-\titleformat{\subsection}
-  {\normalfont\normalsize\bfseries}
-  {\thesubsection}{0.6em}{}
-\titlespacing*{\subsection}{0pt}{1.1ex plus 0.3ex minus 0.2ex}{0.5ex}
-
-\newenvironment{bodytwocol}
-  {\begin{spacing}{1}\begin{multicols}{2}\RaggedRight\setlength{\parskip}{0.7ex plus 0.2ex minus 0.1ex}}
-  {\end{multicols}\end{spacing}}
 
 \begin{document}
 
@@ -151,7 +158,8 @@
 % AND ADDING \input{namechapter.tex} BELOW
 \input{Chapter1.tex}
 \input{Chapter2.tex}
-\input{chapters/Chapter4}
+\input{chapters/Chapter3_Method}
+\input{chapters/Chapter4_Experiments}
 % \input{chapters/chapter5 }
 % \input{chapters/Chapter3}
 
@@ -167,8 +175,8 @@
 % APPENDICES ARE OPTIONAL
 % COMMENT OUT BOTH LINES BELOW TO REMOVE THEM
 % ADD CHAPTERS TO ADD MULTIPLE APPENDICES
-% \appendix 
-% \input{AppendixA.tex}
+\appendix
+\input{chapters/AppendixA.tex}
 %\input{AppendixB.tex} % Example second appendix (need to create the file in "chapters")
 
 

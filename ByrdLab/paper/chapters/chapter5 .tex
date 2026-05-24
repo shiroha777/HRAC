@@ -14,15 +14,14 @@
 
 \section{Evaluation Objectives}
 
-The evaluation assesses HSM-Adaptive in terms of (i) \textbf{utility} under benign training, (ii) \textbf{robustness} under Byzantine attacks, and (iii) \textbf{tolerance to heterogeneity} under non-IID client data. The goal is to demonstrate improved resilience over standard averaging without introducing excessive suppression of benign but diverse clients.
+The evaluation assesses HRAC in terms of (i) \textbf{utility} under benign training, (ii) \textbf{robustness} under Byzantine attacks, and (iii) \textbf{tolerance to heterogeneity} under non-IID client data. The goal is to demonstrate improved resilience over standard averaging without introducing excessive suppression of benign but diverse clients.
 
 \section{Experimental Setup}
-ZZ
 Experiments follow a synchronous federated learning protocol with a fixed training budget (rounds, local epochs, and optimiser) shared across all methods. Standard benchmark datasets (e.g., MNIST and CIFAR-10) and consistent model architectures are used to ensure comparability. Both \textbf{IID} and \textbf{non-IID} data partitions are evaluated (e.g., label-skew partitions) to reflect realistic client heterogeneity.
 
 \section{Baselines and Threat Model}
 
-HSM-Adaptive is compared against FedAvg (mean aggregation) and representative robust baselines (e.g., coordinate-wise median and trimmed-mean; Krum where applicable). The threat model assumes a fraction of clients are Byzantine and can transmit arbitrary updates. Attacks include \textbf{label flipping}, \textbf{scaling}, \textbf{MSA/shuffle}, and \textbf{history-aware} variants that exploit temporal dynamics.
+HRAC is compared against FedAvg (mean aggregation) and representative robust baselines (e.g., coordinate-wise median and trimmed-mean; Krum where applicable). The threat model assumes a fraction of clients are Byzantine and can transmit arbitrary updates. Attacks include \textbf{label flipping}, \textbf{scaling}, \textbf{MSA/shuffle}, and \textbf{history-aware} variants that exploit temporal dynamics.
 
 \section{Metrics and Protocol}
 
@@ -34,4 +33,4 @@ In simulated settings where attacker identities are known, detection precision/r
 
 \section{Ablations and Success Criteria}
 
-Ablation studies isolate the contribution of key components (CountSketch consensus, self-consistency, momentum alignment, and scale gating). Success is defined as: (i) minimal degradation under benign training relative to FedAvg, (ii) clear accuracy/stability improvements under attacks, and (iii) maintained Neff under non-IID settings, indicating avoidance of overly aggressive suppression.
+Ablation studies isolate the contribution of key components (global median cap, history-residual clipping, and $\nu$-based weighting). Success is defined as: (i) minimal degradation under benign training relative to FedAvg, (ii) clear accuracy/stability improvements under attacks, and (iii) avoidance of overly aggressive suppression under non-IID settings.

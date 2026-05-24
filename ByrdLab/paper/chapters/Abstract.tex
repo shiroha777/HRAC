@@ -1,3 +1,22 @@
-Federated learning enables collaborative training without centralising raw data, but it is vulnerable to Byzantine clients and model poisoning. Robust aggregation is particularly difficult under non-IID data, where benign clients may have persistent and legitimate update differences, and under temporal dynamics that allow stealthy attackers to create slow drift over many rounds.
+Federated learning enables collaborative training without centralising raw data,
+but it remains vulnerable to Byzantine clients and model poisoning. Robust
+aggregation is especially difficult under non-IID data, where benign clients may
+have persistent and legitimate update differences, and under temporal attacks
+that create slow cross-round drift.
 
-This dissertation proposes \emph{HRAC} (History-Residual Adaptive Clipping), an oracle-free aggregation method that performs bounded suppression rather than hard exclusion. HRAC first applies a robust global norm cap based on the median update norm, then clips each client only relative to its own historical update centre. It maintains per-client exponential moving averages for residual scale and residual change, denoted by $\mu_i$ and $\nu_i$, and uses elevated late-stage $\nu_i$ values to softly reduce the weights of clients whose behaviour changes more strongly than the population baseline. Experiments across benign and adversarial settings evaluate utility, robustness, and interpretability using accuracy curves and diagnostics such as residual thresholds, $\mu/\nu$ trajectories, client weights, and attacker-aware bottom-weight summaries.
+This dissertation proposes \emph{HRAC} (History-Residual Adaptive Clipping), an
+oracle-free aggregation method that performs bounded suppression rather than
+hard exclusion. HRAC combines an EMA-smoothed median norm cap with per-client
+history-residual clipping, then applies a delayed soft weighting rule based on
+residual-change statistics. By comparing clients primarily with their own update
+histories, HRAC aims to reduce harmful influence without forcing benign
+non-IID clients into a single global cluster.
+
+Experiments on CIFAR-10 with 10 clients and $30\%$ Byzantine participation show
+that HRAC remains competitive under benign training and improves robustness in
+several structured or temporally persistent attack settings, particularly
+non-IID MSA, HisMSA, ALIE, and IPM. Component ablations indicate that the global
+median cap is especially influential under MSA, while $\nu$-based temporal
+weighting contributes most clearly under ALIE. The results support the use of lightweight client-specific
+residual histories, while also showing limitations under protocol-compliant
+label poisoning, bit flipping, and limited experimental coverage.
