@@ -11,25 +11,37 @@
 \thesisspacing
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-\section{Overview}
+\section{Design Rationale}
 
-This chapter defines HRAC and explains how it is implemented in the federated
-learning codebase. The design goal is to reduce malicious influence without forcing all benign
-clients into one tight cluster. This is important under non-IID data: a benign
-client may consistently differ from the population mean because its local data
-distribution is different. HRAC therefore uses each client's own history as the
-main reference. The method combines (i) a robust global norm cap, (ii)
-per-client history-residual clipping, (iii) residual-change tracking through
-EMA statistics, and (iv) a late-stage soft weighting rule based on elevated
-change statistics.
+The design follows from three limitations in the related work. Mean aggregation
+tolerates heterogeneous benign clients, but a large or coordinated
+model-poisoning update enters the average with linear influence.
+Population-centred robust rules, including centred clipping, reduce this risk
+by comparing clients with a common centre, but that centre can be misleading
+under non-IID data. Temporal methods show that history can stabilise learning,
+but the historical reference should reflect each client's own behaviour rather
+than one global pattern shared by all clients.
 
+These observations determine the HRAC components. Like centred clipping, HRAC
+uses clipping to bound influence rather than to make Byzantine updates vanish.
+The global median norm cap limits large-scale malicious updates before they
+enter the aggregate. The history-residual clipping step then allows each client
+to affect the round only through a bounded residual relative to its own recent
+behaviour, so a client is not penalised only because it is far from the
+population centre. The \(\nu_i\) statistic tracks residual movement over time,
+and the weight penalty suppresses persistently elevated movement
+gradually before the weighted aggregation. HRAC is therefore not a hard
+detector. It is an influence-limiting rule designed for settings where benign
+heterogeneity and malicious update deviations can coexist.
 \section{Problem Setup and Threat Model}
 \label{sec:problem-threat-model}
 
-Consider a federated learning system with $N$ clients and a coordinating
+Consider a federated learning system with $N$ clients and a global
 server. At communication round $t$, each participating client computes a local
-model update or gradient-like message $\Delta_i^t \in \mathbb{R}^d$ and sends it
-to the server. The server applies an aggregation rule
+training message $\Delta_i^t \in \mathbb{R}^d$ and sends it to the server. As
+in Chapter~\ref{ch2}, $\Delta_i^t$ is treated as a gradient-like descent
+direction, so the global model is updated by subtracting the final aggregate.
+The server applies an aggregation rule
 \[
     \operatorname{Agg}(\Delta_1^t,\ldots,\Delta_N^t)
 \]
@@ -44,29 +56,27 @@ includes both direct model manipulation attacks, such as bit flipping, ALIE,
 IPM, MSA, and HisMSA, and protocol-compliant data poisoning through label
 flipping.
 
-The defence does not assume access to attacker labels, the benign aggregate, or
-the exact Byzantine identities during aggregation. The objective is therefore
-not to perfectly classify clients as benign or malicious. Instead, the goal is
-to limit the influence of harmful updates while preserving useful contributions
-from benign but heterogeneous clients. This distinction is important under
-non-IID data: a benign client may be far from the population centre for
-legitimate statistical reasons, so hard outlier removal can damage utility.
+The objective is not to perfectly classify clients as benign or malicious.
+Instead, the goal is to limit the influence of harmful updates while preserving
+useful contributions from benign but heterogeneous clients. This distinction is
+important under non-IID data: a benign client may be far from the population
+centre for legitimate statistical reasons, so hard outlier removal can damage
+utility.
 
 HRAC is designed for this setting with two assumptions. First, extreme
 round-wise update magnitudes should be bounded before aggregation. Second,
 client behaviour should be compared primarily with the client's own historical
-trajectory rather than only with a global population centre. The method remains
-oracle-free: labels identifying attackers are used only for controlled
-diagnostic analysis, not by the aggregation rule itself.
+trajectory rather than only with a global population centre.
 
 \section{Aggregation Pipeline}
 
-In communication round $t$, the server receives flattened client updates
+In communication round $t$, the server receives flattened client messages
 $\{\Delta_i^t\}_{i=1}^{N}$, with $\Delta_i^t \in \mathbb{R}^d$. HRAC first
 limits extreme magnitudes using a median-based cap, then processes each client
-relative to its own residual history. After a warm-up period, the server applies
-a soft $\nu$-based weight penalty before forming the aggregate and updating the
-per-client histories.
+relative to its own residual history. The clipped residuals are used to score
+cross-round movement through \(\nu_i\). After a warm-up period, the server
+turns these scores into soft weights, forms the weighted aggregate, and then
+updates the per-client histories.
 
 Algorithm~\ref{alg:hrac} summarises the complete server-side HRAC procedure.
 The rest of this section gives the definitions and design rationale behind each
@@ -76,18 +86,20 @@ stage.
 \caption{History-Residual Adaptive Clipping (HRAC)}
 \label{alg:hrac}
 \begin{algorithmic}[1]
-\Require updates $\{\Delta_i^t\}_{i=1}^{N}$, client ids, states
-$(b_i,\mu_i,\nu_i,\bar r_i^{\mathrm{prev}},\bar m)$, parameters
-$c_g,c,\rho_g,\rho_b,\rho_\mu,\rho_\nu,T_\nu,\alpha,w_{\max}$
+\Require messages $\{\Delta_i^t\}_{i=1}^{N}$, client ids, states
+$(b_i,\mu_i,\nu_i,p_i,\bar r_i^{\mathrm{prev}},\bar m)$, parameters
+$c_g,c,\rho_g,\rho_b,\rho_\mu,\rho_\nu,\rho_p,T_\nu,\alpha,w_{\max}$
 \Ensure aggregated update $g_t$
 \State $m_t \gets \operatorname{med}_{j}\|\Delta_j^t\|_2$
 \State if $\bar m$ is uninitialised, set $\bar m\gets m_t$; \quad
-$B_t \gets c_g\bar m$
+$B_t \gets c_g\max(\bar m,s_{\min})$
 \For{each client $i$}
     \State $\hat{\Delta}_i^t \gets
     \min(1,B_t/(\|\Delta_i^t\|_2+\epsilon))\Delta_i^t$
     \If{$i$ is a new client}
-        \State initialise $b_i,\mu_i,\nu_i,\bar r_i^{\mathrm{prev}}$
+        \State $b_i\gets\hat\Delta_i^t$; \quad
+        $\mu_i,\nu_i\gets \min(\max(m_t,\mu_{\min}),2B_t)$
+        \State $p_i\gets0$; \quad $\bar r_i^{\mathrm{prev}}\gets0$
         \State $\tilde{\Delta}_i^t\gets \hat{\Delta}_i^t$
     \Else
         \State $r_i^t\gets \hat{\Delta}_i^t-b_i$; \quad
@@ -95,7 +107,6 @@ $B_t \gets c_g\bar m$
         \State $\bar r_i^t\gets
         \min(1,\tau_i^t/(\|r_i^t\|_2+\epsilon))r_i^t$
         \State $\tilde{\Delta}_i^t\gets b_i+\bar r_i^t$
-        \State optionally cap $\tilde{\Delta}_i^t$ again by $B_t$
     \EndIf
 \EndFor
 \If{$t\leq T_\nu$}
@@ -104,12 +115,14 @@ $B_t \gets c_g\bar m$
     \State $\bar\nu^t\gets N^{-1}\sum_{j=1}^{N}\nu_j$
     \For{each client $i$}
         \State $e_i^t\gets \mathbb{I}[\nu_i>0.9]\max(\nu_i-\bar\nu^t,0)$
-        \State $\hat w_i^t\gets 1/(1+\alpha e_i^t)$
+        \State $p_i\gets \rho_p p_i+(1-\rho_p)e_i^t$
+        \State $\hat w_i^t\gets 1/(1+\alpha p_i)$
     \EndFor
     \State normalise $\{\hat w_i^t\}$ and cap weights by $w_{\max}$
 \EndIf
 \State $g_t\gets \sum_{i=1}^{N} w_i^t\tilde{\Delta}_i^t$
 \For{each non-new client $i$}
+    \State $\tilde{\Delta}_{i,\mathrm{safe}}^t\gets\tilde{\Delta}_i^t$
     \State $b_i\gets \rho_b b_i+(1-\rho_b)\tilde{\Delta}_{i,\mathrm{safe}}^t$
     \State $\mu_i\gets \rho_\mu\mu_i+(1-\rho_\mu)\|\bar r_i^t\|_2$
     \State $d_i^t\gets \|\bar r_i^t-\bar r_i^{\mathrm{prev}}\|_2$
@@ -136,13 +149,14 @@ forming the clipping threshold. Let
 The clipping threshold used in round $t$ is formed from the stored scale at the
 start of the round,
 \[
-    B_t = c_g \bar m_{t-1},
+    B_t = c_g\max\{\bar m_{t-1},s_{\min}\},
 \]
-with the first round warm-starting $\bar m$ from the current median norm. Thus,
+where \(s_{\min}=10^{-3}\) in the implementation. The first round warm-starts
+\(\bar m\) from the current median norm. Thus,
 the current round contributes to the next round's cap rather than immediately
 changing its own threshold. This makes the cap predictable with respect to the
-current batch of submitted updates and reduces sensitivity to one-round norm
-spikes or drops. Each update is clipped by
+current batch of submitted messages and reduces sensitivity to one-round norm
+spikes or drops. Each message is clipped by
 \begin{equation}
     \hat{\Delta}_i^t
     =
@@ -177,6 +191,13 @@ The processed message is then reconstructed as
 \begin{equation}
     \tilde{\Delta}_i^t = b_i^t + \bar r_i^t .
 \end{equation}
+This reconstructed message is used directly for aggregation after residual
+clipping.
+In the reported runs, the same reconstructed message is also used to update the
+client history centre, so
+\[
+    \tilde{\Delta}_{i,\mathrm{safe}}^t=\tilde{\Delta}_i^t .
+\]
 
 \subsection{Separated Aggregation and Statistics Paths}
 
@@ -186,7 +207,7 @@ processed version $\tilde{\Delta}_i^t$. The statistics path can lift extremely
 small-norm updates to the median norm when computing $\mu_i$ and $\nu_i$. This
 prevents a near-zero update from artificially collapsing a client's history
 statistics. The aggregation value itself is not lifted in this case, so the
-actual model update remains faithful to the received message after global
+actual descent direction remains faithful to the received message after global
 clipping.
 
 \subsection{EMA History Updates}
@@ -196,10 +217,12 @@ centre is
 \begin{equation}
     b_i^{t+1}
     =
-    \rho_b b_i^t + (1-\rho_b)\Delta_{i,\mathrm{safe}}^t ,
+    \rho_b b_i^t + (1-\rho_b)\tilde{\Delta}_{i,\mathrm{safe}}^t ,
 \end{equation}
-where $\Delta_{i,\mathrm{safe}}^t$ is the processed message after the safety cap.
-The default value is $\rho_b=0.98$.
+where $\tilde{\Delta}_{i,\mathrm{safe}}^t$ is the message used in the history
+update.
+For the reported runs, this is the same reconstructed message used in the
+aggregate. The default value is $\rho_b=0.98$.
 
 The residual scale statistic is updated as
 \begin{equation}
@@ -244,13 +267,27 @@ activation threshold is $0.9$, and the excess score is
         0, & \nu_i^t\leq 0.9 .
     \end{cases}
 \end{equation}
-The raw weight is
+The excess score is itself smoothed before being used for aggregation:
 \begin{equation}
-    \hat w_i^t = \frac{1}{1+\alpha e_i^t},
+    p_i^t = \rho_p p_i^{t-1} + (1-\rho_p)e_i^t .
+\end{equation}
+The implementation uses \(\rho_p=0.90\). This extra EMA prevents a single
+large residual-change measurement from causing an abrupt weight change.
+The raw weight is then
+\begin{equation}
+    \hat w_i^t = \frac{1}{1+\alpha p_i^t},
 \end{equation}
 where $\alpha=5.0$ by default. Raw weights are normalised to sum to one. A
 maximum per-client weight cap, $w_{\max}=0.30$, is then applied iteratively with
 renormalisation to avoid a small number of clients dominating the round.
+More explicitly, let \(q_i=\hat w_i^t/\sum_k\hat w_k^t\). If all
+\(q_i\le w_{\max}\), then \(w_i^t=q_i\). Otherwise, all clients with
+\(q_i>w_{\max}\) are fixed at \(w_{\max}\); the remaining probability mass is
+renormalised over the uncapped clients in proportion to their current \(q_i\)
+values. This fix-and-renormalise step is repeated until no weight exceeds
+\(w_{\max}\). The resulting weights are the final aggregation weights used in
+\(g_t\). In the convergence analysis, quantities such as the Byzantine weight
+mass \(\beta_t\) are defined after this capping step.
 
 The final aggregate is
 \begin{equation}
@@ -261,43 +298,21 @@ The final aggregate is
 \label{sec:software-integration}
 
 HRAC is implemented as the \texttt{C\_HRAC} aggregation class in the same
-centralised aggregation interface used by the baseline rules. This design keeps
-the training loop independent of the chosen aggregator: the server receives a
-list of client messages, calls the selected aggregation object, and applies the
-returned update to the global model. In the experiment driver, selecting
-\texttt{hrac} instantiates \texttt{C\_HRAC} with the same client sets and attack
-configuration used by the other aggregators, which allows HRAC to be compared
-against mean aggregation, FABA, centred clipping, and LFighter under matched
-training settings.
+centralised aggregation interface used by the baseline rules. The training loop
+therefore remains the same across mean aggregation, FABA, centred clipping,
+LFighter, and HRAC. The same experiment driver also constructs the attack
+object, including label flipping, bit flipping, ALIE, IPM, MSA, and HisMSA, so
+the method is evaluated under matched training settings rather than through
+attack-specific code.
 
-The attack layer is also modular. The same training entry point can construct
-label-flipping attacks, bit flipping, ALIE, IPM, MSA, or HisMSA before passing
-the attack object to the centralised training environment. This separation is
-important for the evaluation: HRAC is not written as a special case for one
-attack, and the aggregation rule does not receive attacker labels during
-training. Attacker identities are supplied only to the controlled logging code
-so that diagnostic summaries can report, for example, whether low-weight clients
-correspond to known Byzantine clients in a simulated run.
-
-The implementation exposes component switches for ablation experiments. The
-driver can disable the global median cap, disable per-client residual clipping,
-disable $\nu$-based weighting, or leave only the global cap before averaging.
-These switches reuse the same \texttt{C\_HRAC} implementation, changing only the
-enabled components. This avoids maintaining separate aggregator classes for
-each ablation and reduces the risk that observed differences are caused by
-unintended changes elsewhere in the training pipeline.
-
-In addition to returning the aggregate update, HRAC records diagnostic
-quantities at a fixed logging interval. The log contains residual thresholds,
-$\mu$ and $\nu$ statistics, pre- and post-clipping norms, normalised weights,
-and attacker-aware summaries when attacker identities are known for evaluation.
-The implementation also includes invariant checks for numerical sanity, such as
-weight normalisation, non-negative weights, norm-cap constraints, and EMA update
-consistency. Training records are written through the common cache interface,
-which stores accuracy and loss trajectories together with experiment metadata
-such as dataset, partition, Byzantine level, seed, and ablation flags. The same
-cached records are then used by the plotting scripts that generate the figures
-reported in Chapter~\ref{ch:experiments-results}.
+The ablation experiments use controlled variants of the same HRAC pipeline by
+removing the global median cap, per-client residual clipping, $\nu$-based
+weighting, or both history-based stages. HRAC also records diagnostic quantities
+at a fixed logging interval, including residual thresholds, $\mu$ and $\nu$
+statistics, pre- and post-clipping norms, normalised weights, and aggregate
+norms. Accuracy, loss, metadata, and diagnostic logs are stored through the
+common cache interface and reused by the plotting scripts in
+Chapter~\ref{ch:experiments-results}.
 
 \section{Hyperparameters}
 
@@ -313,28 +328,35 @@ The main HRAC hyperparameters are:
     \item $\rho_g=0.95$: EMA decay for the global median-norm scale.
     \item $T_\nu=50$: first iteration after which $\nu$-based weighting is used.
     \item $\alpha=5.0$: strength of the $\nu$ excess penalty.
+    \item $\rho_p=0.90$: EMA decay for the smoothed $\nu$-penalty score.
     \item $w_{\max}=0.30$: maximum normalised weight allowed for one client.
 \end{itemize}
 
-The algorithm is intentionally not a hard detector. Client identities are used
-only for controlled logging and evaluation; the aggregation rule itself does not
-need attacker labels or the attacker fraction. The most sensitive parameters are
-$c$, which controls how much residual deviation is allowed before clipping, and
-$\alpha$, which controls how sharply elevated $\nu$ values reduce weights.
+The algorithm is intentionally not a hard detector. Its most sensitive
+parameters are $c$, which controls how much residual deviation is allowed before
+clipping, and $\alpha$, which controls how sharply elevated $\nu$ values reduce
+weights.
 
 \section{Convergence Statement}
 \label{sec:convergence-statement}
 
 The empirical evaluation in Chapter~\ref{ch:experiments-results} is the primary
-evidence for HRAC's practical robustness, but the method also admits a modular
-convergence interpretation. The analysis treats HRAC as an aggregation rule that
-produces \(g_t\), compares this aggregate with the ideal honest-client average,
-and then inserts the resulting aggregation error into the standard descent
-argument for smooth non-convex optimisation.
+evidence for HRAC's practical robustness. The method can also be analysed
+through a modular convergence argument. The analysis treats HRAC as an
+aggregation rule that produces \(g_t\), compares this aggregate with the honest
+conditional centre, and inserts the resulting aggregation error into the
+standard descent argument for smooth non-convex optimisation. The lagged
+EMA-smoothed median cap makes the clipping radius predictable before the current
+round's stochastic updates are observed. Under additional admissibility
+conditions on the honest conditional centre and residual scale, this allows the
+clipped-moment lemma of Sadiev et
+al.~\cite[Lemma~5.1]{sadiev2023highprob} to be applied.
 
 Under bounded honest updates, an honest-majority condition for the median-based
-scale, bounded honest clipping distortion, and a bounded residual Byzantine
-weight mass, HRAC converges to a neighbourhood of first-order stationarity. In
+scale, bounded honest clipping distortion, bounded honest-weight distortion, and
+bounded residual Byzantine weight mass, this conditional analysis shows that
+HRAC converges to a first-order stationary neighbourhood in the averaged-gradient
+sense. In
 particular, for a sufficiently small constant step size \(\eta\), the averaged
 squared gradient norm satisfies a bound of the form
 \begin{equation}
@@ -346,12 +368,14 @@ squared gradient norm satisfies a bound of the form
 \end{equation}
 where \(R_{\mathrm{HRAC}}\) collects the honest stochastic variance,
 non-IID/bias term, global clipping distortion, residual clipping distortion,
-and the remaining Byzantine aggregation error. The EMA-smoothed median cap is
-handled by showing that the median scale remains bounded under an honest
-majority and that the EMA update preserves this bound.
+and the remaining Byzantine aggregation error. When the logged dynamics exhibit
+a late-stage group-level \(\nu\)-gap, the weighting rule can reduce the
+residual Byzantine mass appearing in this error term.
 
-This result should be read as a stability guarantee rather than as a claim of
-exact convergence to a zero-gradient point under arbitrary attacks. Persistent
-heterogeneity and nonzero Byzantine mass create a nonzero error floor. The full
-proof, including the aggregation-error decomposition and the explicit
-neighbourhood constant, is given in Appendix~\ref{app:convergence-analysis}.
+This result should be read as a conditional bounded-influence stability
+statement rather than as a claim of exact convergence to a zero-gradient point
+under arbitrary attacks. The proof does not establish universal Byzantine
+identification. Persistent heterogeneity and nonzero Byzantine mass create a
+nonzero error floor. The full proof, including the aggregation-error
+decomposition and the explicit neighbourhood constant, is given in
+Appendix~\ref{app:convergence-analysis}.

@@ -1,9 +1,33 @@
 \label{Conclusions}
 
-This project investigated Byzantine robustness in federated/distributed learning, aiming to preserve utility under non-IID data while resisting both overt and stealthy attacks. The main outcome is HRAC, a history-residual adaptive clipping aggregator implemented in a modular framework with interchangeable attacks, aggregators, and diagnostic logging.
+This project studied Byzantine-robust aggregation under the trade-off between
+robustness and heterogeneity tolerance. Mean aggregation is not conservative
+enough for strong model-poisoning attacks, while robust aggregation can become
+too conservative when benign non-IID clients naturally deviate from the
+population.
 
-HRAC combines a median-based global norm cap with per-client residual clipping, so benign clients are compared primarily with their own histories rather than with a single global centre. Its behaviour is made interpretable through per-round residual thresholds, $\mu/\nu$ history statistics, normalised client weights, and attacker-aware bottom-weight summaries in controlled settings. These diagnostics help explain robustness--utility trade-offs beyond final accuracy.
+HRAC addresses this trade-off by limiting the influence of unstable updates. It
+combines an EMA-smoothed median norm cap, per-client history-residual clipping,
+and delayed soft weighting based on residual-change statistics. The method
+compares each client mainly with its own historical behaviour rather than
+treating distance from a global centre as sufficient evidence of maliciousness.
 
-Empirically, HRAC remains competitive under benign CIFAR-10 training and shows stronger robustness in several tested structured or temporally persistent attack settings, particularly in non-IID MSA, HisMSA, ALIE, and IPM. The ablation study clarifies that different components matter in different regimes: the global median cap is essential under MSA, while $\nu$-based temporal weighting is especially important under ALIE. These findings support the central design choice of combining round-wise magnitude control with client-specific residual histories.
+On CIFAR-10, HRAC remains competitive in benign training in the reported cached
+runs. Its strongest improvements appear under MSA and under non-IID ALIE/IPM. The
+diagnostic plots also show strong attacker down-weighting in several settings,
+including bit flipping, although the final-accuracy tables show that FABA can
+still outperform HRAC in some bit-flipping cases. The ablations support the
+component design: the global cap is essential under MSA, while $\nu$-based
+temporal weighting is most important under ALIE.
 
-Limitations include hyperparameter sensitivity, limited experimental coverage, and the possibility that highly non-IID but benign clients may still be down-weighted if their residual-change statistics remain elevated. The empirical results should therefore be read as controlled single-seed trends rather than as a complete statistical benchmark. Future work will (i) evaluate across multiple datasets, client populations, Byzantine fractions, and non-IID severities, (ii) compare against a broader set of baselines under matched training budgets, and (iii) improve self-calibration of thresholds and weights while testing stronger adaptive attackers that explicitly exploit client histories.
+The results also show the method's limits. Label flipping remains more
+attack- and partition-dependent, especially when protocol-compliant poisoning is
+combined with non-IID data. The reported experiments are controlled cached runs
+on CIFAR-10 with \(N=10\), seed 100, \(b=2\) or \(b=3\), and one label class per
+client in the non-IID split, so they should be treated as single-seed trends
+rather than confidence-interval benchmarks. The next experimental step is not
+only to add more runs, but to vary the factors that could change the ranking:
+dataset and model family, client count, attacker fraction, label-skew severity,
+and attack strength. HRAC also assumes that the server can observe per-client
+updates and maintain per-client history statistics, so it is not directly
+compatible with standard secure aggregation without additional protocol support.
