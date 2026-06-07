@@ -1205,6 +1205,7 @@ class C_HRAC(CentraliedAggregation):
                  c=2.5, c_g=3.0,
                  enable_logging=True, log_interval=100, eps=1e-12, log_file=None,
                  nu_penalty_start_iter=50, nu_penalty_alpha=5.0,
+                 rho_nu_penalty=0.90,
                  verbose_nu_log_interval=50,
                  enable_global_cap=True,
                  enable_per_client_residual_clip=True,
@@ -1244,6 +1245,7 @@ class C_HRAC(CentraliedAggregation):
         # Nu-based penalty parameters (only for weighting; aggregation still uses original updates)
         self.nu_penalty_start_iter = nu_penalty_start_iter
         self.nu_penalty_alpha = nu_penalty_alpha
+        self.rho_nu_penalty = rho_nu_penalty
         self.nu_weight_max = 0.30
         
         # Per-client histories (initialized on first run)
@@ -1251,6 +1253,7 @@ class C_HRAC(CentraliedAggregation):
         self.b_norm = {}     # EMA mean for stats path (normalized-vector only)
         self.mu = {}          # from normalized path → τ = c*μ
         self.nu = {}          # from normalized path → weights
+        self.nu_penalty_ema = {}  # smoothed excess-nu penalty used for weights
         self.r_prev = {}      # previous clipped residual (normalized path)
         
         self.one = None       # Reusable tensor for clip (device/dtype adaptive)
@@ -1615,8 +1618,8 @@ class C_HRAC(CentraliedAggregation):
         
         # Aggregate: weighted mean (with nu-based penalty after start_iter)
         # Why low attacker weight can still hurt: (1) 3 attackers × 0.003 ≈ 1% weight but same direction
-        # → residual in attack direction every round. (2) When "ν>1: 10/10", honest also penalized (ν-1),
-        # so honest weights drop and relative attacker share can rise. (3) Using (ν-med)^+ for outlier
+        # → residual in attack direction every round. (2) When many clients pass the ν>0.9 gate,
+        # honest clients can also receive a mild penalty, so relative attacker share can rise. (3) Using (ν-med)^+ for outlier
         # keeps penalizing attackers when mean is inflated.
         processed_tensor = torch.stack(processed, dim=0)  # (N, D)
 
@@ -1633,7 +1636,7 @@ class C_HRAC(CentraliedAggregation):
                     nu_val = median_norm.item()
                 nu_values[i] = nu_val
             
-            # Only penalize when ν > 1; penalty is based on all clients' ν: excess = (ν - mean(ν))^+ so that
+            # Only penalize when ν > 0.9; penalty is based on all clients' ν: excess = (ν - mean(ν))^+ so that
             # clients only slightly above mean (e.g. honest with ν≈1.6–2) get mild penalty, real outliers (attackers) get large penalty
             nu_mean = nu_values.mean()
             nu_excess = torch.where(
@@ -1641,7 +1644,21 @@ class C_HRAC(CentraliedAggregation):
                 torch.clamp(nu_values - nu_mean, min=0.0),
                 torch.zeros_like(nu_values),
             )
-            raw_weights = 1.0 / (1.0 + self.nu_penalty_alpha * nu_excess)
+            penalty_values = torch.empty(N, device=device, dtype=dtype)
+            rho_penalty = torch.tensor(self.rho_nu_penalty, device=device, dtype=dtype)
+            for i, cid in enumerate(client_ids):
+                old_penalty = self.nu_penalty_ema.get(
+                    cid,
+                    torch.zeros((), device=device, dtype=dtype),
+                ).to(device=device, dtype=dtype)
+                new_penalty = (
+                    rho_penalty * old_penalty
+                    + (1.0 - rho_penalty) * nu_excess[i]
+                ).detach()
+                self.nu_penalty_ema[cid] = new_penalty
+                penalty_values[i] = new_penalty
+
+            raw_weights = 1.0 / (1.0 + self.nu_penalty_alpha * penalty_values)
 
             # Normalize weights to sum to 1
             weight_sum = raw_weights.sum() + self.eps
@@ -1685,13 +1702,8 @@ class C_HRAC(CentraliedAggregation):
             r_bar_norm = r_bar_norm_list[i]
             delta_tilde_norm = delta_tilde_norm_list[i]
             
-            # Aggregation path: update b from clipped/original update (optional: with momentum on the step)
-            ds_norm = torch.norm(delta_processed) + self.eps
-            if self.enable_global_cap:
-                delta_safe_capped = delta_processed * torch.minimum(self.one, B / ds_norm)
-            else:
-                delta_safe_capped = delta_processed
-            self.b[cid] = (self.rho_b * self.b[cid] + (1.0 - self.rho_b) * delta_safe_capped).detach()
+            # Aggregation path: update b from the reconstructed message used in aggregation.
+            self.b[cid] = (self.rho_b * self.b[cid] + (1.0 - self.rho_b) * delta_processed).detach()
             # Stats path: 小 norm client 的 b_norm/μ/ν/r_prev 全部由 scale 后的量计算；仅聚合路径的 b 与 g_t 用未 scale 的数值
             self.b_norm[cid] = (self.rho_b * self.b_norm[cid] + (1.0 - self.rho_b) * delta_tilde_norm).detach()
             # μ: 小 norm 时用 scale 后向量的范数（||delta_tilde_norm||），否则用残差范数 ||r_bar_norm||
@@ -1864,7 +1876,7 @@ class C_HRAC(CentraliedAggregation):
                 ratio = (median_norm_val + self.eps) / (prev_val + self.eps)
                 add(f"  Norm change ratio: {ratio:.3f} (prev={prev_val}, curr={median_norm_val:.3f})")
         if self.iteration_count > self.nu_penalty_start_iter:
-            add(f"  [Nu Penalty] ACTIVE: nu>1 -> excess=(nu-mean(nu))^+ (relative to all clients); alpha={self.nu_penalty_alpha:.2f}; tau, mu, nu: real, norm<0.5*med lifted to median for stats")
+            add(f"  [Nu Penalty] ACTIVE: nu>0.9 -> excess=(nu-mean(nu))^+, EMA-smoothed with rho={self.rho_nu_penalty:.2f}; alpha={self.nu_penalty_alpha:.2f}; tau, mu, nu: real, norm<0.5*med lifted to median for stats")
             if weights is not None:
                 weights_t = torch.tensor(weights)
                 add(f"  Weights: mean={weights_t.mean():.4f}, min={weights_t.min():.4f}, max={weights_t.max():.4f}, sum={weights_t.sum():.4f}")
@@ -1924,7 +1936,7 @@ class C_HRAC(CentraliedAggregation):
         if getattr(self, '_last_g_norm', None) is not None:
             line += f"g_norm={self._last_g_norm:.4f} w_max={getattr(self, '_last_w_max', 0):.4f} g_capped={1 if getattr(self, '_last_g_capped', False) else 0} "
         if self.iteration_count > self.nu_penalty_start_iter:
-            line += f"[NuPenalty:ON alpha={self.nu_penalty_alpha:.2f} (nu>1 -> (nu-mean)^+)] "
+            line += f"[NuPenalty:ON alpha={self.nu_penalty_alpha:.2f} rho_p={self.rho_nu_penalty:.2f} (nu>0.9 -> EMA((nu-mean)^+))] "
             if weights is not None:
                 weights_t = torch.tensor(weights)
                 line += f"w_mean={weights_t.mean():.4f} w_min={weights_t.min():.4f} w_max={weights_t.max():.4f} "
