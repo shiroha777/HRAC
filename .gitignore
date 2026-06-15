@@ -22,6 +22,7 @@ outputs/
 ByrdLab/paper/
 ByrdLab/prove*
 convergence/
+*.tex
 
 # Third-party or external repositories kept locally
 byzantine-robust-optimizer/
