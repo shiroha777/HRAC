@@ -1,70 +1,115 @@
-# Mean Aggregator Is More Robust Than Robust Aggregators Under Label Poisoning Attacks on Distributed Heterogeneous Data
-This hub stores the code for paper *Mean Aggregator Is More Robust Than Robust Aggregators Under Label Poisoning Attacks on Distributed Heterogeneous Data*.
+# HRAC
 
-For the tutorial related to the paper *Mean Aggregator Is More Robust Than Robust Aggregators Under Label Poisoning Attacks*, please refer to the `README_IJCAI.md` file.
-## Install
-1. Download the dependant packages:
-- python 3.8.10
-- pytorch 1.9.0
-- matplotlib 3.3.4
-- networkx 2.5.1
+History-Residual Adaptive Clipping (HRAC) is a Byzantine-robust aggregation method for federated learning experiments under label-flipping and model-poisoning attacks.
 
-2. Download the dataset to the directory `./dataset` and create a directory named `./record`. The experiment outputs will be stored in `./record`.
+This repository contains the experiment code used to compare HRAC with common robust aggregators such as mean, trimmed mean, FABA, centered clipping, and LFighter.
 
-- *MNIST*: [http://yann.lecun.com/exdb/mnist/](http://yann.lecun.com/exdb/mnist/)
-- *CIFAR10*: [https://www.cs.toronto.edu/~kriz/cifar.html](https://www.cs.toronto.edu/~kriz/cifar.html)
+## What Is Included
 
-## Construction
-The main programs can be found in the following files:
-- `ByrdLab`: main codes
-- `main CMomentum(-xxx).py`, : program entry
-  * `main CMomentum.py`: compute classification accuracies of different aggregators (Fig. 1, 2, 4, 5)
-  * `main CMomentum-hetero-bound.py`: compute heterogeneity of regular gradients and disturbances of poisoned gradients (Fig. 3, 6)
-  * `main CMomentum-A-xi-NN.py`: compute classification accuracies of different aggregators under different data distributions and attack strengths (Fig. 7)
-  * `main CMomentum-variance.py`: compute variance of regular and poisoned stochastic gradients (Fig. 8)
--  `draw_fig`: directories containing the codes that draw the figures in paper
+- `ByrdLab/`: core training, attack, aggregation, task, and dataset utilities.
+- `main CMomentum.py`: main experiment entry point for momentum-based centralized federated learning.
+- `run.ps1`: PowerShell wrapper for running `main CMomentum.py` with the configured local Python interpreter.
+- `run_cifar10_b3_all.py`: batch runner for CIFAR-10 experiments over attacks, data partitions, and aggregators.
+- `draw_fig/`: plotting scripts for generated experiment records.
+- `argsParser.py`: command-line options shared by the experiment scripts.
 
+Local papers, proof drafts, external repositories, datasets, and generated records are intentionally ignored by Git.
 
-## Runing
-### Run CMomentum
+## Aggregators
+
+The main script supports:
+
+- `mean`
+- `trimmed-mean`
+- `faba`
+- `cc`
+- `lfighter`
+- `hrac`
+
+HRAC adds history-aware residual clipping, adaptive norm/change statistics, and optional ablation modes.
+
+## Attacks
+
+Common attack options include:
+
+- `none`
+- `label_flipping`
+- `furthest_label_flipping`
+- `msa`
+- `hismsa`
+- `ipm`
+- `alie`
+- `poisonedfl`
+
+Exact behavior is implemented in `ByrdLab/attack.py` and selected in `main CMomentum.py`.
+
+## Setup
+
+Install the Python dependencies used by the original experiment code:
+
+- Python 3.8
+- PyTorch
+- matplotlib
+- networkx
+- numpy
+- scikit-learn
+
+Download datasets locally into `dataset/`. Generated logs and results are written under `record/`. Both folders are ignored by Git.
+
+## Run A Single Experiment
+
 ```bash
-python "main CMomentum.py"  --aggregation <aggregation-name> --attack <attack-name> --data-partition <data-partition>
-# ========================
-# e.g.
-# python "main CMomentum.py" --aggregation trimmed-mean --attack label_flipping --data-partition noniid
+python "main CMomentum.py" --aggregation hrac --attack label_flipping --data-partition iid
 ```
 
-> The arguments can be
->
->
-> `<aggregation-name>`: 
-> - mean
-> - trimmed-mean
-> - faba
-> - cc
-> - lfighter
->
-> `<attack-name>`: 
-> - label_flipping (which executes static label flipping attacks)
-> - furthest_label_flipping (which executes dynamic label flipping attacks)
+Example with a non-IID split:
 
->
-> `<data-partition>`: 
-> - iid
-> - dirichlet_mild
-> - noniid
-
----
-
-
-# ====================
-# Fig
+```bash
+python "main CMomentum.py" --aggregation hrac --attack hismsa --data-partition noniid
 ```
-cd draw_fig
 
-python draw-MultiFig-Momentum.py 
+On Windows, the wrapper can be used:
 
-python draw_A_xi_Momentum.py
-
-python draw_alpha_prob_Momentum.py
+```powershell
+.\run.ps1 --aggregation hrac --attack label_flipping --data-partition iid
 ```
+
+## HRAC Ablations
+
+HRAC ablation options are available through:
+
+```bash
+python "main CMomentum.py" --aggregation hrac --hrac-ablation-experiment --hrac-ablation no_nu_weighting
+```
+
+Supported ablation names:
+
+- `full`
+- `no_global_cap`
+- `no_residual_clip`
+- `no_nu_weighting`
+- `global_cap_only`
+
+Additional HRAC parameters:
+
+- `--hrac-rho-b`
+- `--hrac-rho-mu`
+- `--hrac-rho-g`
+
+## Run The CIFAR-10 Sweep
+
+```bash
+python run_cifar10_b3_all.py
+```
+
+This runs combinations of attacks, IID/non-IID partitions, and aggregators defined inside the script.
+
+## Notes
+
+This repository is kept focused on source code. The following are not uploaded:
+
+- local paper files and `.tex` drafts
+- generated datasets and records
+- third-party repositories kept locally
+- temporary test files
+- external experiment folders
