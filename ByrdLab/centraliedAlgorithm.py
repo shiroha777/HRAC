@@ -7,7 +7,7 @@ from ByrdLab.attack import DataPoisoningAttack, C_bit_flipping
 from ByrdLab.library.dataset import EmptySet
 from ByrdLab.library.partition import EmptyPartition
 from ByrdLab.library.measurements import avg_loss_accuracy_dist, consensus_error, one_node_loss_accuracy_dist
-from ByrdLab.library.tool import log, flatten_list, unflatten_vector, flatten_vector
+from ByrdLab.library.tool import log, flatten_list, unflatten_vector, flatten_vector, flatten_model
 from ByrdLab.library.cache_io import dump_file_in_cache, load_file_in_cache
 
 
@@ -333,7 +333,6 @@ class CMomentum_under_DPA(Dist_Dataset_Opt_Env):
             [torch.zeros_like(para, requires_grad=False) for para in server_model.parameters()]
             for _ in range(self.node_size)
         ]
-        # byzantine-robust-optimizer: honest send momentum, Byzantine (BF) send -raw_gradient
         use_bf_raw_grad = (
             self.attack is not None and self.byzantine_size != 0
             and isinstance(self.attack, C_bit_flipping)
@@ -400,6 +399,8 @@ class CMomentum_under_DPA(Dist_Dataset_Opt_Env):
             else:
                 worker_grad_flat = flatten_list(worker_momentum)
             if self.attack is not None and self.byzantine_size != 0 and not isinstance(self.attack, DataPoisoningAttack):
+                if getattr(self.attack, 'name', None) == 'poisonedfl':
+                    self.attack.update_model_history(flatten_model(server_model).detach().clone(), lr=lr)
                 self.attack.run(worker_grad_flat)
 
             aggrGrad_flat = self.aggregation.run(worker_grad_flat)

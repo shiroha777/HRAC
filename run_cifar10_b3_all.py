@@ -28,7 +28,6 @@ AGGREGATORS = [
     'cc',
     'lfighter',
     'hrac',
-    'hsm',
 ]
 
 def main():

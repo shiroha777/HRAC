@@ -1269,6 +1269,15 @@ class C_HRAC(CentraliedAggregation):
         self._hrac_log_buffer = []
         self._invariant_log_buffer = []
         self._invariant_checked_rounds = 0
+        self._residual_clip_total = 0
+        self._residual_clip_honest_total = 0
+        self._residual_clip_attacker_total = 0
+        self._residual_clip_stats_total = 0
+        self._last_residual_clip_count = 0
+        self._last_residual_clip_honest_count = 0
+        self._last_residual_clip_attacker_count = 0
+        self._last_residual_clip_stats_count = 0
+        self._client_residual_clip_flags = {}
 
     def set_accuracy(self, accuracy):
         self.current_accuracy = accuracy
@@ -1558,6 +1567,7 @@ class C_HRAC(CentraliedAggregation):
                     'nu_after': self.nu[cid].item(),
                     'clip_gap': 0.0,
                     'clip_rhs': 0.0,
+                    'clip_gap_stats': 0.0,
                     'delta_gap': 0.0,
                     'mu_expected': self.mu[cid].item(),
                     'nu_expected': self.nu[cid].item(),
@@ -1587,6 +1597,7 @@ class C_HRAC(CentraliedAggregation):
                     r_bar_norm = self._clip_by_norm(r_norm, tau)
                 else:
                     r_bar_norm = r_norm
+                clip_gap_stats = torch.norm(r_bar_norm - r_norm).item()
                 delta_tilde_norm = self.b_norm[cid] + r_bar_norm
                 if self.enable_global_cap and self.enable_post_residual_b_cap:
                     delta_tilde_norm = delta_tilde_norm * torch.minimum(self.one, B / (torch.norm(delta_tilde_norm) + self.eps))
@@ -1596,6 +1607,7 @@ class C_HRAC(CentraliedAggregation):
                 # 无过小范数：完全按原始流程，τ,μ,ν 用真实 r_bar / delta_tilde
                 r_bar_norm_list.append(r_bar)
                 delta_tilde_norm_list.append(delta_tilde)
+                clip_gap_stats = torch.norm(r_bar - r).item()
             tau_list.append(tau.item())
             client_debug.append({
                 'cid': cid,
@@ -1610,6 +1622,7 @@ class C_HRAC(CentraliedAggregation):
                 'nu_after': nu_before,
                 'clip_gap': torch.norm(r_bar - r).item(),
                 'clip_rhs': max(torch.norm(r).item() - tau.item(), 0.0),
+                'clip_gap_stats': clip_gap_stats,
                 'delta_gap': torch.norm(delta_tilde_pre_cap - delta_t_i).item(),
                 'mu_expected': mu_before,
                 'nu_expected': nu_before,
@@ -1737,6 +1750,34 @@ class C_HRAC(CentraliedAggregation):
             client_debug[i]['nu_after'] = self.nu[cid].item()
         
         # Verbose ν update detail: every verbose_nu_log_interval iters print d/nu stats + per-client d and ν
+        clip_tol = max(float(self.eps) * 10.0, 1e-10)
+        residual_clip_flags = [
+            (not entry['is_new']) and entry['clip_gap'] > clip_tol
+            for entry in client_debug
+        ]
+        residual_clip_stats_flags = [
+            (not entry['is_new']) and entry['clip_gap_stats'] > clip_tol
+            for entry in client_debug
+        ]
+        self._last_residual_clip_count = sum(residual_clip_flags)
+        self._last_residual_clip_honest_count = sum(
+            flag and client_debug[i]['cid'] in self.honest_nodes
+            for i, flag in enumerate(residual_clip_flags)
+        )
+        self._last_residual_clip_attacker_count = sum(
+            flag and client_debug[i]['cid'] in self.byzantine_nodes
+            for i, flag in enumerate(residual_clip_flags)
+        )
+        self._last_residual_clip_stats_count = sum(residual_clip_stats_flags)
+        self._client_residual_clip_flags = {
+            entry['cid']: bool(residual_clip_flags[i])
+            for i, entry in enumerate(client_debug)
+        }
+        self._residual_clip_total += self._last_residual_clip_count
+        self._residual_clip_honest_total += self._last_residual_clip_honest_count
+        self._residual_clip_attacker_total += self._last_residual_clip_attacker_count
+        self._residual_clip_stats_total += self._last_residual_clip_stats_count
+
         verbose_nu_interval = getattr(self, 'verbose_nu_log_interval', 0)
         do_nu_detail = (verbose_nu_interval > 0 and d_eff_list and self.iteration_count % verbose_nu_interval == 0)
         if do_nu_detail:
@@ -1866,6 +1907,21 @@ class C_HRAC(CentraliedAggregation):
         add(f"  Clip threshold (tau): mean={tm:.4f}, min={tmin:.4f}, max={tmax:.4f}")
         add(f"  Norm baseline (mu): mean={mum:.4f}, min={mumin:.4f}, max={mumax:.4f}")
         add(f"  Change baseline (nu): mean={num:.4f}, min={numin:.4f}, max={numax:.4f}")
+        add(
+            "  Residual clip triggers: "
+            + f"round={getattr(self, '_last_residual_clip_count', 0)} "
+            + f"(honest={getattr(self, '_last_residual_clip_honest_count', 0)}, "
+            + f"attacker={getattr(self, '_last_residual_clip_attacker_count', 0)}), "
+            + f"total={getattr(self, '_residual_clip_total', 0)} "
+            + f"(honest={getattr(self, '_residual_clip_honest_total', 0)}, "
+            + f"attacker={getattr(self, '_residual_clip_attacker_total', 0)})"
+        )
+        if getattr(self, '_last_residual_clip_stats_count', 0) != getattr(self, '_last_residual_clip_count', 0):
+            add(
+                "  Residual clip triggers (stats path): "
+                + f"round={getattr(self, '_last_residual_clip_stats_count', 0)}, "
+                + f"total={getattr(self, '_residual_clip_stats_total', 0)}"
+            )
         
         if median_norm is not None:
             median_norm_val = median_norm.item() if hasattr(median_norm, 'item') else median_norm
@@ -1895,46 +1951,63 @@ class C_HRAC(CentraliedAggregation):
             if weights is not None:
                 if norms_final is not None:
                     add("    (tau, mu, nu: real; norm<0.5*median lifted to median for stats. norm_pre=raw, norm_post=clip, norm_final=aggregation)")
-                    add("    Client_ID | tau | mu | nu | norm_pre | norm_post | norm_final | weight | Attacker")
+                    add("    Client_ID | tau | mu | nu | norm_pre | norm_post | norm_final | weight | rclip | Attacker")
+                    add("    " + "-" * 110)
+                    for i, cid in enumerate(client_ids):
+                        is_attacker = "YES" if cid in self.byzantine_nodes else "NO"
+                        rclip = 1 if self._client_residual_clip_flags.get(cid, False) else 0
+                        add(f"    {cid:9d} | {tau_list[i]:.4f} | {mu_list[i]:.4f} | {nu_list[i]:.4f} | "
+                            f"{norms_pre[i]:.4f} | {norms_post[i]:.4f} | {norms_final[i]:.4f} | {weights[i]:.4f} | {rclip:d} | {is_attacker}")
+                else:
+                    add("    Client_ID | tau | mu | nu | norm_pre | norm_post | weight | rclip | Attacker")
+                    add("    " + "-" * 95)
+                    for i, cid in enumerate(client_ids):
+                        is_attacker = "YES" if cid in self.byzantine_nodes else "NO"
+                        rclip = 1 if self._client_residual_clip_flags.get(cid, False) else 0
+                        add(f"    {cid:9d} | {tau_list[i]:.4f} | {mu_list[i]:.4f} | {nu_list[i]:.4f} | "
+                            f"{norms_pre[i]:.4f} | {norms_post[i]:.4f} | {weights[i]:.4f} | {rclip:d} | {is_attacker}")
+            else:
+                if norms_final is not None:
+                    add("    Client_ID | tau | mu | nu | norm_pre | norm_post | norm_final | rclip | Attacker")
                     add("    " + "-" * 100)
                     for i, cid in enumerate(client_ids):
                         is_attacker = "YES" if cid in self.byzantine_nodes else "NO"
+                        rclip = 1 if self._client_residual_clip_flags.get(cid, False) else 0
                         add(f"    {cid:9d} | {tau_list[i]:.4f} | {mu_list[i]:.4f} | {nu_list[i]:.4f} | "
-                            f"{norms_pre[i]:.4f} | {norms_post[i]:.4f} | {norms_final[i]:.4f} | {weights[i]:.4f} | {is_attacker}")
+                            f"{norms_pre[i]:.4f} | {norms_post[i]:.4f} | {norms_final[i]:.4f} | {rclip:d} | {is_attacker}")
                 else:
-                    add("    Client_ID | tau | mu | nu | norm_pre | norm_post | weight | Attacker")
+                    add("    Client_ID | tau | mu | nu | norm_pre | norm_post | rclip | Attacker")
                     add("    " + "-" * 85)
                     for i, cid in enumerate(client_ids):
                         is_attacker = "YES" if cid in self.byzantine_nodes else "NO"
+                        rclip = 1 if self._client_residual_clip_flags.get(cid, False) else 0
                         add(f"    {cid:9d} | {tau_list[i]:.4f} | {mu_list[i]:.4f} | {nu_list[i]:.4f} | "
-                            f"{norms_pre[i]:.4f} | {norms_post[i]:.4f} | {weights[i]:.4f} | {is_attacker}")
-            else:
-                if norms_final is not None:
-                    add("    Client_ID | tau | mu | nu | norm_pre | norm_post | norm_final | Attacker")
-                    add("    " + "-" * 90)
-                    for i, cid in enumerate(client_ids):
-                        is_attacker = "YES" if cid in self.byzantine_nodes else "NO"
-                        add(f"    {cid:9d} | {tau_list[i]:.4f} | {mu_list[i]:.4f} | {nu_list[i]:.4f} | "
-                            f"{norms_pre[i]:.4f} | {norms_post[i]:.4f} | {norms_final[i]:.4f} | {is_attacker}")
-                else:
-                    add("    Client_ID | tau | mu | nu | norm_pre | norm_post | Attacker")
-                    add("    " + "-" * 75)
-                    for i, cid in enumerate(client_ids):
-                        is_attacker = "YES" if cid in self.byzantine_nodes else "NO"
-                        add(f"    {cid:9d} | {tau_list[i]:.4f} | {mu_list[i]:.4f} | {nu_list[i]:.4f} | "
-                            f"{norms_pre[i]:.4f} | {norms_post[i]:.4f} | {is_attacker}")
+                            f"{norms_pre[i]:.4f} | {norms_post[i]:.4f} | {rclip:d} | {is_attacker}")
         else:
-            add("    Client_ID | tau | mu | nu | Attacker")
-            add("    " + "-" * 50)
+            add("    Client_ID | tau | mu | nu | rclip | Attacker")
+            add("    " + "-" * 60)
             for i, cid in enumerate(client_ids):
                 is_attacker = "YES" if cid in self.byzantine_nodes else "NO"
-                add(f"    {cid:9d} | {tau_list[i]:.4f} | {mu_list[i]:.4f} | {nu_list[i]:.4f} | {is_attacker}")
+                rclip = 1 if self._client_residual_clip_flags.get(cid, False) else 0
+                add(f"    {cid:9d} | {tau_list[i]:.4f} | {mu_list[i]:.4f} | {nu_list[i]:.4f} | {rclip:d} | {is_attacker}")
         add("")
         # One-line summary (included in buffer)
         acc_str = f"{self.current_accuracy:.4f}" if self.current_accuracy is not None else "N/A"
         line = f"iter={self.iteration_count} acc={acc_str} tau_mean={tm:.4f} mu_mean={mum:.4f} nu_mean={num:.4f} "
         if getattr(self, '_last_g_norm', None) is not None:
             line += f"g_norm={self._last_g_norm:.4f} w_max={getattr(self, '_last_w_max', 0):.4f} g_capped={1 if getattr(self, '_last_g_capped', False) else 0} "
+        rclip_ids = [
+            str(cid)
+            for cid in client_ids
+            if self._client_residual_clip_flags.get(cid, False)
+        ]
+        line += (
+            f"rclip_round={getattr(self, '_last_residual_clip_count', 0)} "
+            f"rclip_h={getattr(self, '_last_residual_clip_honest_count', 0)} "
+            f"rclip_b={getattr(self, '_last_residual_clip_attacker_count', 0)} "
+            f"rclip_total={getattr(self, '_residual_clip_total', 0)} "
+            f"rclip_ids=[{','.join(rclip_ids)}] "
+        )
         if self.iteration_count > self.nu_penalty_start_iter:
             line += f"[NuPenalty:ON alpha={self.nu_penalty_alpha:.2f} rho_p={self.rho_nu_penalty:.2f} (nu>0.9 -> EMA((nu-mean)^+))] "
             if weights is not None:

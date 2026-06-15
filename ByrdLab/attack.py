@@ -116,7 +116,7 @@ class C_sign_flipping(CentralizedAttackWrapper):
 
 
 def bit_flipping(messages, honest_nodes, byzantine_nodes):
-    """Bit Flipping (BF): Each Byzantine sends negation of its own gradient. Matches byzantine-robust-optimizer (BitFlippingWorker)."""
+    """Bit Flipping (BF): each Byzantine sends the negation of its own message."""
     for node in byzantine_nodes:
         messages[node].neg_()
 
@@ -148,8 +148,90 @@ def alie_attack(messages, honest_nodes, byzantine_nodes, n=None, m=None):
         messages[node].copy_(malicious)
 
 
+def min_max_attack(messages, honest_nodes, byzantine_nodes,
+                   dev_type='unit_vec', initial_lambda=10.0,
+                   threshold_diff=1e-5, eps=1e-12,
+                   use_honest=True):
+    """
+    Min-Max model poisoning attack from NDSS21-Model-Poisoning.
+
+    The malicious update is mean(honest) - lambda * deviation, where lambda is
+    searched so that its maximum squared distance to any honest update is no
+    larger than the maximum pairwise squared distance inside the honest cloud.
+
+    If use_honest=False, this follows the unknown-benign-gradient notebook:
+    the attacker estimates the reference cloud using only Byzantine messages.
+    """
+    reference_nodes = honest_nodes if use_honest else byzantine_nodes
+    reference_stack = messages[reference_nodes]
+    model_re = torch.mean(reference_stack, dim=0)
+
+    if dev_type == 'unit_vec':
+        norm = torch.norm(model_re)
+        if norm <= eps:
+            deviation = torch.sign(model_re)
+        else:
+            deviation = model_re / norm
+    elif dev_type == 'sign':
+        deviation = torch.sign(model_re)
+    elif dev_type == 'std':
+        deviation = torch.std(reference_stack, dim=0)
+    else:
+        raise ValueError(f"unknown Min-Max deviation type: {dev_type!r}")
+
+    if torch.norm(deviation) <= eps:
+        malicious = model_re
+        for node in byzantine_nodes:
+            messages[node].copy_(malicious)
+        return
+
+    pairwise_dist = torch.cdist(reference_stack, reference_stack, p=2).pow(2)
+    max_distance = torch.max(pairwise_dist)
+
+    def is_success(lamda):
+        mal_update = model_re - lamda * deviation
+        max_d = torch.norm(reference_stack - mal_update, dim=1).pow(2).max()
+        return max_d <= max_distance
+
+    lamda = torch.tensor(float(initial_lambda), device=messages.device, dtype=messages.dtype)
+    lamda_fail = lamda.clone()
+    lamda_succ = torch.zeros((), device=messages.device, dtype=messages.dtype)
+
+    # Match NDSS21-Model-Poisoning: start from lambda=10 and halve lamda_fail
+    # until lambda and the last successful lambda are within threshold_diff.
+    while torch.abs(lamda_succ - lamda).item() > threshold_diff:
+        if is_success(lamda):
+            lamda_succ = lamda.clone()
+            lamda = lamda + lamda_fail / 2.0
+        else:
+            lamda = lamda - lamda_fail / 2.0
+        lamda_fail = lamda_fail / 2.0
+
+    malicious = model_re - lamda_succ * deviation
+    for node in byzantine_nodes:
+        messages[node].copy_(malicious)
+
+
+def mimic_attack(messages, honest_nodes, byzantine_nodes, epsilon=0):
+    """
+    Mimic attack from ByzFL: all Byzantine workers copy one honest worker.
+
+    ByzFL defines Mimic_epsilon(x_1, ..., x_n) = x_{epsilon+1}. Its Byzantine
+    client wrapper then repeats this single vector for all Byzantine clients.
+    Here epsilon indexes honest_nodes in the local node ordering.
+    """
+    if not isinstance(epsilon, int) or epsilon < 0:
+        raise ValueError("Mimic epsilon must be a non-negative integer")
+    if epsilon >= len(honest_nodes):
+        raise ValueError("Mimic epsilon must be smaller than the number of honest nodes")
+    source_node = honest_nodes[epsilon]
+    malicious = messages[source_node].clone()
+    for node in byzantine_nodes:
+        messages[node].copy_(malicious)
+
+
 class C_bit_flipping(CentralizedAttackWrapper):
-    """Bit Flipping (BF): Each Byzantine sends negation of its own gradient. Matches byzantine-robust-optimizer."""
+    """Bit Flipping (BF): Byzantine workers negate their own submitted messages."""
     def __init__(self, honest_nodes, byzantine_nodes):
         super().__init__(name='bit_flipping', honest_nodes=honest_nodes,
                          byzantine_nodes=byzantine_nodes, attack_fn=bit_flipping)
@@ -172,6 +254,163 @@ class C_ALIE(CentralizedAttack):
 
     def run(self, messages):
         alie_attack(messages, self.honest_nodes, self.byzantine_nodes, n=self.n, m=self.m)
+
+
+class C_MinMaxFull(CentralizedAttackWrapper):
+    """Min-Max attack with full knowledge of current honest messages."""
+    def __init__(self, honest_nodes, byzantine_nodes, dev_type='unit_vec',
+                 initial_lambda=10.0, threshold_diff=1e-5):
+        super().__init__(name='min_max_full', honest_nodes=honest_nodes,
+                         byzantine_nodes=byzantine_nodes,
+                         attack_fn=min_max_attack, dev_type=dev_type,
+                         initial_lambda=initial_lambda,
+                         threshold_diff=threshold_diff,
+                         use_honest=True)
+        self.dev_type = dev_type
+        self.initial_lambda = initial_lambda
+        self.threshold_diff = threshold_diff
+
+
+class C_MinMaxUnknown(CentralizedAttackWrapper):
+    """Min-Max attack when current honest messages are unknown to attackers."""
+    def __init__(self, honest_nodes, byzantine_nodes, dev_type='unit_vec',
+                 initial_lambda=30.0, threshold_diff=1e-5):
+        super().__init__(name='min_max_unknown', honest_nodes=honest_nodes,
+                         byzantine_nodes=byzantine_nodes,
+                         attack_fn=min_max_attack, dev_type=dev_type,
+                         initial_lambda=initial_lambda,
+                         threshold_diff=threshold_diff,
+                         use_honest=False)
+        self.dev_type = dev_type
+        self.initial_lambda = initial_lambda
+        self.threshold_diff = threshold_diff
+
+
+# Backward-compatible alias. The command-line entry now chooses explicit classes.
+C_MinMax = C_MinMaxFull
+
+
+class C_Mimic(CentralizedAttackWrapper):
+    """Mimic attack: Byzantine workers repeat one honest worker's message."""
+    def __init__(self, honest_nodes, byzantine_nodes, epsilon=0):
+        super().__init__(name='mimic', honest_nodes=honest_nodes,
+                         byzantine_nodes=byzantine_nodes,
+                         attack_fn=mimic_attack, epsilon=epsilon)
+        self.epsilon = epsilon
+
+
+class C_PoisonedFL(CentralizedAttack):
+    """
+    PoisonedFL-style multi-round consistency attack.
+
+    The original MXNet implementation builds a model-delta attack from the
+    previous global-model motion, previous malicious update, a fixed random
+    sign vector, and a feedback-adjusted scale. This PyTorch/LPA integration
+    keeps the same stateful mechanism inside the message-level attack API.
+
+    LPA applies aggregated messages with param -= lr * message, while the
+    original PoisonedFL code applies model deltas with param += update. Hence
+    this class sends the negative of the PoisonedFL model-delta proxy.
+    """
+    def __init__(self, honest_nodes, byzantine_nodes, scaling_factor=8.0,
+                 feedback_interval=50, min_scaling_factor=0.5, eps=1e-9):
+        super().__init__(name='poisonedfl', honest_nodes=honest_nodes,
+                         byzantine_nodes=byzantine_nodes)
+        self.scaling_factor = float(scaling_factor)
+        self.feedback_interval = int(feedback_interval)
+        self.min_scaling_factor = float(min_scaling_factor)
+        self.eps = eps
+        self.iteration = 0
+        self.fixed_rand = None
+        self.last_model = None
+        self.last_50_model = None
+        self.history = None
+        self.feedback_delta = None
+        self.last_malicious_delta = None
+        self.pending_last_50_refresh = False
+        self.current_lr = 1.0
+
+    def _ensure_state(self, messages):
+        dim = messages.size(1)
+        if self.fixed_rand is None:
+            rand = torch.randn(dim, device=messages.device, dtype=messages.dtype)
+            self.fixed_rand = torch.sign(rand)
+            self.fixed_rand[self.fixed_rand == 0] = 1
+        elif (self.fixed_rand.device != messages.device
+                or self.fixed_rand.dtype != messages.dtype or self.fixed_rand.numel() != dim):
+            rand = torch.randn(dim, device=messages.device, dtype=messages.dtype)
+            self.fixed_rand = torch.sign(rand)
+            self.fixed_rand[self.fixed_rand == 0] = 1
+            self.history = None
+            self.last_model = None
+            self.last_50_model = None
+            self.feedback_delta = None
+            self.last_malicious_delta = None
+            self.pending_last_50_refresh = False
+            self.iteration = 0
+
+    def update_model_history(self, current_model_flat, lr=None):
+        if lr is not None:
+            self.current_lr = max(float(lr), self.eps)
+        current = current_model_flat.detach().clone()
+        if self.last_model is None or self.last_model.numel() != current.numel():
+            self.last_model = current
+            self.last_50_model = None
+            self.history = None
+            self.feedback_delta = None
+            return
+        self.history = current - self.last_model
+        self.last_model = current
+        if self.pending_last_50_refresh or self.last_50_model is None:
+            self.last_50_model = current.clone()
+            self.pending_last_50_refresh = False
+        self.feedback_delta = current - self.last_50_model
+
+    def _feedback_scale(self):
+        if self.feedback_interval <= 0 or self.iteration % self.feedback_interval != 0:
+            return self.scaling_factor
+        if self.feedback_delta is None:
+            return self.scaling_factor
+        accumulated_delta = torch.where(
+            self.feedback_delta == 0,
+            self.last_model,
+            self.feedback_delta
+        )
+        aligned_dim_cnt = (torch.sign(accumulated_delta) == self.fixed_rand).sum().item()
+        dim = self.fixed_rand.numel()
+        # Normal approximation to the one-sided 99% binomial threshold used by
+        # the original implementation's hard-coded k_99 constants.
+        k_99 = dim / 2.0 + 2.326347874 * math.sqrt(dim / 4.0)
+        if aligned_dim_cnt < k_99 and self.scaling_factor * 0.7 >= self.min_scaling_factor:
+            self.scaling_factor = self.scaling_factor * 0.7
+        self.pending_last_50_refresh = True
+        return self.scaling_factor
+
+    def run(self, messages):
+        self._ensure_state(messages)
+
+        model_delta = None
+        if self.history is not None and self.last_malicious_delta is not None:
+            history_norm = torch.norm(self.history)
+            last_grad_norm = torch.norm(self.last_malicious_delta)
+            scale = torch.abs(
+                self.history
+                - self.last_malicious_delta * history_norm / (last_grad_norm + self.eps)
+            )
+            deviation = scale * self.fixed_rand / (torch.norm(scale) + self.eps)
+            sf = self._feedback_scale()
+            lamda_succ = sf * history_norm
+            model_delta = lamda_succ * deviation
+            malicious_message = -model_delta / self.current_lr
+            for node in self.byzantine_nodes:
+                messages[node].copy_(malicious_message)
+
+        if model_delta is not None:
+            self.last_malicious_delta = model_delta.detach().clone()
+        elif self.last_malicious_delta is None:
+            self.last_malicious_delta = torch.zeros(messages.size(1), device=messages.device,
+                                                    dtype=messages.dtype)
+        self.iteration += 1
 
 
 class C_TauBoundary(CentralizedAttack):

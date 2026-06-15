@@ -1,13 +1,13 @@
 from argsParser import args
 
 from ByrdLab import FEATURE_TYPE
-from ByrdLab.aggregation import C_mean, C_trimmed_mean, C_faba, C_centered_clipping, C_LFighter, C_HSM_FedAvg, C_HRAC
-from ByrdLab.attack import C_gaussian, C_same_value, C_sign_flipping, C_bit_flipping, C_IPM, C_ALIE, C_TauBoundary, feature_label_random, \
+from ByrdLab.aggregation import C_mean, C_trimmed_mean, C_faba, C_centered_clipping, C_LFighter, C_HRAC
+from ByrdLab.attack import C_gaussian, C_same_value, C_sign_flipping, C_bit_flipping, C_IPM, C_ALIE, C_MinMaxFull, C_MinMaxUnknown, C_Mimic, C_PoisonedFL, C_TauBoundary, feature_label_random, \
                             label_flipping, label_random, furthest_label_flipping, adversarial_label_flipping, feature_label_random, HisMSA, MSA
 from ByrdLab.centraliedAlgorithm import CSGD, CSGD_under_DPA, CMomentum_under_DPA, CMomentum_with_LFighter_under_DPA, CMomentum_under_HisMSA
 from ByrdLab.library.cache_io import dump_file_in_cache, load_file_in_cache
 from ByrdLab.library.dataset import ijcnn, mnist, fashionmnist, cifar10, mnist_sorted_by_labels
-from ByrdLab.library.learnRateController import ladder_lr, one_over_sqrt_k_lr, twoStage_lr
+from ByrdLab.library.learnRateController import ladder_lr, one_over_sqrt_k_lr
 from ByrdLab.library.partition import (LabelSeperation, TrivalPartition,
                                    iidPartition, DirichletIiiPartition, DirichletMildPartition, DirichletNoniidPartition,
                                     DirichletPartition_a, DirichletPartition_b, DirichletPartition_c, DirichletPartition_d, DirichletPartition_e, DirichletPartition_f)
@@ -18,8 +18,8 @@ from ByrdLab.tasks.leastSquare import LeastSquareToySet, LeastSquareToyTask
 from ByrdLab.tasks.neuralNetwork import NeuralNetworkTask
 
 node_size = 10
-byzantine_size = 3  # 增加到3个恶意节点（30%的比例，更明显的攻击效果）
-
+DEFAULT_BYZANTINE_SIZE = 3
+byzantine_size = args.byzantine_size if args.byzantine_size is not None else DEFAULT_BYZANTINE_SIZE
 all_nodes = list(range(node_size))
 honest_nodes = list(range(node_size - byzantine_size))
 byzantine_nodes = [node for node in all_nodes if node not in honest_nodes]
@@ -81,6 +81,18 @@ elif args.attack == 'ipm':
 elif args.attack == 'alie':
     # A Little Is Enough. From byzantine-robust-optimizer.
     attack = C_ALIE(honest_nodes=honest_nodes, byzantine_nodes=byzantine_nodes)
+elif args.attack in ['min_max', 'minmax', 'min-max', 'min_max_full', 'minmax_full', 'min-max-full']:
+    # Min-Max with known benign gradients: uses current-round honest messages.
+    attack = C_MinMaxFull(honest_nodes=honest_nodes, byzantine_nodes=byzantine_nodes)
+elif args.attack in ['min_max_unknown', 'minmax_unknown', 'min-max-unknown']:
+    # Min-Max with unknown benign gradients: uses only Byzantine messages as the reference cloud.
+    attack = C_MinMaxUnknown(honest_nodes=honest_nodes, byzantine_nodes=byzantine_nodes)
+elif args.attack == 'mimic':
+    # Mimic: all Byzantine workers copy one honest worker's current message.
+    attack = C_Mimic(honest_nodes=honest_nodes, byzantine_nodes=byzantine_nodes, epsilon=0)
+elif args.attack in ['poisonedfl', 'poisoned_fl']:
+    # PoisonedFL-style multi-round consistency attack. sf=8 follows the source repo examples.
+    attack = C_PoisonedFL(honest_nodes=honest_nodes, byzantine_nodes=byzantine_nodes, scaling_factor=8.0)
 elif args.attack == 'tau_boundary':
     # Tau-Boundary (strong): round-gradient full-information, sees honest updates this round. Pressure test.
     attack = C_TauBoundary(honest_nodes=honest_nodes, byzantine_nodes=byzantine_nodes, use_honest=True)
@@ -115,10 +127,8 @@ elif args.lr_ctrl == 'ladder':
 else:
     assert False, 'unknown lr-ctrl'
 
-# Two-stage learning rate:
-#   - for iteration < 500: 0.01
-#   - for iteration >= 500: 0.02
-lr_ctrl = twoStage_lr(switch_iteration=500, lr1=0.01, lr2=0.01)
+# Use the environment's constant learning-rate controller.
+lr_ctrl = None
 
 # ===========================================
     
@@ -180,91 +190,109 @@ elif _agg == 'hrac':
     else:
         partition_name_str = 'LabelSeperation'
     
-    if args.attack == 'none' or attack is None:
-        log_filename = 'hrac-log-baseline.txt'
-        invariant_log_filename = 'hrac-invariants-baseline.txt'
+    hrac_ablation = args.hrac_ablation if args.hrac_ablation_experiment else None
+    hrac_flags = {
+        'enable_global_cap': True,
+        'enable_per_client_residual_clip': True,
+        'enable_nu_weighting': True,
+        'enable_post_residual_b_cap': False,
+    }
+    if hrac_ablation == 'no_global_cap':
+        hrac_flags['enable_global_cap'] = False
+    elif hrac_ablation == 'no_residual_clip':
+        hrac_flags['enable_per_client_residual_clip'] = False
+    elif hrac_ablation == 'no_nu_weighting':
+        hrac_flags['enable_nu_weighting'] = False
+    elif hrac_ablation == 'global_cap_only':
+        hrac_flags['enable_per_client_residual_clip'] = False
+        hrac_flags['enable_nu_weighting'] = False
+    elif hrac_ablation in (None, 'full'):
+        pass
     else:
-        log_filename = f'hrac-log-{attack_name}.txt'
-        invariant_log_filename = f'hrac-invariants-{attack_name}.txt'
+        assert False, f'unknown HRAC ablation: {hrac_ablation}'
+
+    hrac_params = {
+        'rho_b': args.hrac_rho_b,
+        'rho_mu': args.hrac_rho_mu,
+        'rho_g': args.hrac_rho_g,
+        'rho_nu': 0.87,
+        'rho_nu_penalty': 0.90,
+        'c': 2.5,
+        'c_g': 3.0,
+    }
+
+    def _fmt_hrac_param(value):
+        return f'{value:.4g}'.replace('-', 'm').replace('.', 'p')
+
+    hrac_param_tag_parts = []
+    if abs(args.hrac_rho_b - 0.98) > 1e-12:
+        hrac_param_tag_parts.append(f'rhob{_fmt_hrac_param(args.hrac_rho_b)}')
+    if abs(args.hrac_rho_mu - 0.95) > 1e-12:
+        hrac_param_tag_parts.append(f'rhomu{_fmt_hrac_param(args.hrac_rho_mu)}')
+    if abs(args.hrac_rho_g - 0.95) > 1e-12:
+        hrac_param_tag_parts.append(f'rhog{_fmt_hrac_param(args.hrac_rho_g)}')
+    hrac_param_tag = '_'.join(hrac_param_tag_parts)
+
+    if args.hrac_ablation_experiment:
+        aggregation_name_override = f"HRAC_ablation_{args.hrac_ablation}"
+        log_prefix = f"hrac-ablation-{args.hrac_ablation}"
+    else:
+        aggregation_name_override = "HRAC"
+        log_prefix = "hrac"
+    if hrac_param_tag:
+        aggregation_name_override = f'{aggregation_name_override}_{hrac_param_tag}'
+        log_prefix = f'{log_prefix}-{hrac_param_tag}'
+
+    if args.attack == 'none' or attack is None:
+        log_filename = f'{log_prefix}-log-baseline.txt'
+        invariant_log_filename = f'{log_prefix}-invariants-baseline.txt'
+    else:
+        log_filename = f'{log_prefix}-log-{attack_name}.txt'
+        invariant_log_filename = f'{log_prefix}-invariants-{attack_name}.txt'
     
     log_file_path = os.path.join('record', task.name, f'Centralized_n={node_size}_b={byzantine_size}', partition_name_str, log_filename)
     invariant_log_file_path = os.path.join('record', task.name, f'Centralized_n={node_size}_b={byzantine_size}', partition_name_str, invariant_log_filename)
     print(f'[HRAC] Log file will be saved to: {log_file_path}')
     print(f'[HRAC] Invariant log file will be saved to: {invariant_log_file_path}')
+    print(
+        '[HRAC Params] '
+        f"rho_b={hrac_params['rho_b']}, rho_mu={hrac_params['rho_mu']}, "
+        f"rho_g={hrac_params['rho_g']}, rho_nu={hrac_params['rho_nu']}, "
+        f"c={hrac_params['c']}, c_g={hrac_params['c_g']}"
+    )
+    if hrac_param_tag:
+        print(f'[HRAC Sensitivity] tag={hrac_param_tag}')
+    if args.hrac_ablation_experiment:
+        print(f'[HRAC Ablation] variant={args.hrac_ablation}, flags={hrac_flags}')
     
     aggregation = C_HRAC(
         honest_nodes=honest_nodes,
         byzantine_nodes=byzantine_nodes,
-        rho_b=0.98,
-        rho_mu=0.95,
-        rho_nu=0.87,  # ν momentum: 0.87 → ν tracks d faster (rise/decay)
-        c=2.5,
-        c_g=3.0,  # Global median norm cap multiplier (MSA defense)
-        enable_post_residual_b_cap=False,  # 消融：Δ̃=b+r̄ 后不再乘 min(1,B/‖Δ̃‖)（仍保留入口全局帽 messages_clipped）
+        rho_b=hrac_params['rho_b'],
+        rho_mu=hrac_params['rho_mu'],
+        rho_g=hrac_params['rho_g'],
+        rho_nu_penalty=hrac_params['rho_nu_penalty'],
+        rho_nu=hrac_params['rho_nu'],
+        c=hrac_params['c'],
+        c_g=hrac_params['c_g'],
+        enable_global_cap=hrac_flags['enable_global_cap'],
+        enable_per_client_residual_clip=hrac_flags['enable_per_client_residual_clip'],
+        enable_nu_weighting=hrac_flags['enable_nu_weighting'],
+        enable_post_residual_b_cap=hrac_flags['enable_post_residual_b_cap'],
         enable_logging=True,
         log_interval=100,
         eps=1e-12,
         log_file=log_file_path,
-        enable_invariant_checks=True,
+        enable_invariant_checks=not args.hrac_ablation_experiment,
         invariant_check_mode="log_and_raise",
         invariant_check_tol=1e-6,
         invariant_log_file=invariant_log_file_path,
         invariant_log_interval=1,
         verbose_nu_log_interval=100,        # 每 N 个 iter 打印一次 d/nu 详情（100=与主 log 对齐；1=每 iter 很刷屏；0=关闭）
     )
-elif _agg == 'hsm':
-    # HSM-FedAvg: History-Soft Momentum FedAvg
-    # Enhanced hyperparameters for robust defense against all attack types
-    # HSM-FedAvg: Clean version with simplified, well-justified hyperparameter system
-    # 
-    # Main Config (recommended for paper):
-    #   - rho=0.92, gamma_min=0.15, lam=0.35, kappa=6.0, omega_min=0.10, tau_quantile=0.6
-    #
-    # HisMSA-strong Config (for ablation/appendix):
-    #   - gamma_min=0.10, kappa=7.0, omega_min=0.05, tau_quantile=0.65
-    #
-    # Core 5 parameters (main tuning knobs):
-    #   - rho: History EMA decay (0.92 recommended for HisMSA)
-    #   - gamma_min: Minimum gamma (0.15 balanced, 0.10 for HisMSA-strong)
-    #   - lam: Scale deviation penalty (0.35 recommended)
-    #   - kappa: Sigmoid slope (6.0 balanced, 7.0 for HisMSA-strong)
-    #   - omega_min: Minimum weight floor (0.10 balanced, 0.05 for HisMSA-strong)
-    # Generate log file path based on task and configuration
-    # Format: record/{task_name}/Centralized_n={node_size}_b={byzantine_size}/{partition_name}/hsm-log.txt
-    # This matches the structure used by dump_file_in_cache
-    import os
-    # Get partition name from partition_cls class name
-    if partition_cls is not None:
-        partition_name_str = partition_cls.__name__
-    else:
-        partition_name_str = 'LabelSeperation'  # Default to LabelSeperation for noniid
-    
-    # Generate log file name with attack type
-    if args.attack == 'none' or attack is None:
-        log_filename = 'hsm-log-baseline.txt'
-    else:
-        # Use attack name in filename (e.g., hsm-log-msa.txt, hsm-log-label_flipping.txt)
-        log_filename = f'hsm-log-{attack_name}.txt'
-    
-    log_file_path = os.path.join('record', task.name, f'Centralized_n={node_size}_b={byzantine_size}', partition_name_str, log_filename)
-    # Print log file path for debugging
-    print(f'[HSM-FedAvg] Log file will be saved to: {log_file_path}')
-    
-    aggregation = C_HSM_FedAvg(
-        honest_nodes=honest_nodes,
-        byzantine_nodes=byzantine_nodes,
-        rho=0.9,
-        beta=0.9,
-        k=2.5,
-        use_residual_consistency=True,
-        use_cluster_ref=True,
-        enable_logging=True,
-        log_interval=100,
-        eps=1e-12,
-        log_file=log_file_path,
-    )
+    aggregation.name = aggregation_name_override
 else:
-    assert False, f'unknown aggregation: {args.aggregation!r} (expected: mean, trimmed-mean, faba, cc, lfighter, hrac, hsm)'
+    assert False, f'unknown aggregation: {args.aggregation!r} (expected: mean, trimmed-mean, faba, cc, lfighter, hrac)'
 
 # ===========================================
 
@@ -397,6 +425,15 @@ record = {
     'fix_seed': fix_seed,
     'seed': seed
 }
+
+if _agg == 'hrac' and args.hrac_ablation_experiment:
+    record['hrac_ablation'] = args.hrac_ablation
+    record['hrac_ablation_flags'] = hrac_flags
+
+if _agg == 'hrac':
+    record['hrac_params'] = hrac_params
+    if hrac_param_tag:
+        record['hrac_param_tag'] = hrac_param_tag
 
 # Add detection history if available
 if detection_recall_path is not None:
