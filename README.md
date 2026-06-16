@@ -34,7 +34,6 @@ Common attack options include:
 
 - `none`
 - `label_flipping`
-- `furthest_label_flipping`
 - `msa`
 - `hismsa`
 - `ipm`
